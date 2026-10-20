@@ -37,3 +37,19 @@ Verification for 0.1.1 at commit 863915c: Svelte check passed with no warnings, 
 tests passed, six Playwright interaction tests passed, and Rust tests plus native packaging passed
 on Windows, Linux and macOS in workflow run 39388773164. Updated Windows device-flow retest remains
 pending user verification. A first-release Windows/macOS signing gate is still open.
+
+## README, presets and Windows upgrades · 0.1.2
+
+The README now has a shorter user guide and five current screenshots, generated from explicitly
+labeled demo data with `pnpm screenshots`. Local links, screenshot paths and upstream source commit
+were verified. The comparison catalog covers shared Android packages plus five brand families, with
+model/firmware provenance and trade-offs. Missing observations remain unknown, earlier disabled apps
+are separate, HOME-dependent entries are conditional, and a T-Cast/Alexa bundle requires a feature choice.
+
+Local Svelte checks have zero errors/warnings, 12 state/catalog tests and 7 UI tests passed, and the
+frontend production build passed. Workflow 39392267939 compiled native packages successfully for all
+three platforms, including the NSIS hooks. No automated Windows upgrade test was added, as requested.
+Actual DLL-lock upgrade behavior is for the owner to verify using the steps in TESTING.md.
+
+The installer uses path-scoped Windows Restart Manager resources before interactive legacy removal,
+installation/update and uninstallation. It does not run blanket ADB process-name kills or remove keys.

@@ -86,3 +86,12 @@ Fail closed if identity is ambiguous, including identical TVs or reused IP addre
 identity proof. Verify baseline/journal storage is writable with enough space before a mutation; retain
 journals on uninstall or offer explicit export/removal. Restrict in-app navigation to bundled content;
 any future external links open in the system browser through a narrow allowlist.
+
+## Windows installer lifetime
+
+ADB may outlive the app window and hold its installed USB DLLs open. The NSIS installer uses Windows
+Restart Manager for the app executable and bundled ADB executable at the exact install path, including
+an early GUI callback before invoking older uninstallers. Section hooks also cover silent/update
+installs and new uninstallers. This is upgrade/uninstall cleanup, not discovery cleanup. Other Android
+clients using this particular ADB server can disconnect briefly; a different installation's ADB process
+is not targeted. Host pairing keys are outside the installer payload and are preserved.
