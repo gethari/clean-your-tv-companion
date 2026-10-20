@@ -39,6 +39,7 @@ the scripts; the companion must retain and explain them. The list grows with dev
 | Power loss or Wi-Fi drop mid-change | Reconnect + reconcile, no blind retry | Durable intent/result journal, precondition recheck |
 | Factory reset or firmware update changes identity/capabilities | Fresh audit, preserve historical backup separately | Invalidate stale plan, no replay across reset |
 | Debugging closed at finish | Explain future maintenance requires reconnect | Closing connection is expected, not failed setup |
+| Windows upgrade cannot replace bundled AdbWinUsbApi.dll | Close the app and its installed Android tools before replacement | Path-scoped Windows Restart Manager hooks; do not kill unrelated ADB installations |
 | Unsigned Windows/macOS preview installers | Honest testing instructions | Signing/notarization gate for polished public distribution |
 | Platform-tools redistribution / licenses | Bundle official OS/arch tools and notices | Pin versions/hash manifest; no random mirror |
 | Running headless on Linux | Build/test with virtual display; later laptop smoke test | Real native launch before claiming desktop verified |

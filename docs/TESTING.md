@@ -17,7 +17,7 @@ Use `CYTV_ADB_PATH=/absolute/path/to/adb pnpm tauri dev` when developing without
 
 ## Windows
 
-Download `companion-windows`, extract it and run the `*-setup.exe` NSIS installer. Official ADB and
+Download the Windows setup EXE from the preview release, or `companion-windows` from Actions. Run the NSIS installer. Official ADB and
 its required DLLs are packaged. WebView2 must be present or installed by the bootstrapper; offline
 machines may need the standalone WebView2 runtime beforehand. These preview installers are unsigned:
 Windows may show a publisher warning. Verify the source/release hash; do not turn off antivirus or
@@ -54,3 +54,18 @@ port change, multiple devices, refresh, unsupported device and no additional set
 `cargo test --manifest-path src-tauri/Cargo.toml` after preparing resources/icons. Native CI builds
 Linux/Windows/macOS. Browser screenshots cover design behavior, not native IPC/packaging. See REVIEW
 for actual test results; planned checks must not be represented as completed.
+
+## Windows upgrade check for the owner
+
+The 0.1.2 NSIS installer registers the app and its exact bundled `adb.exe` path with Windows Restart
+Manager before an interactive upgrade can invoke the older uninstaller. Install/update and uninstall
+hooks repeat that check before replacing/removing files. This releases DLLs loaded by the bundled ADB
+process without using a blanket `taskkill /IM adb.exe` or `adb kill-server`. Closing that server may
+briefly disconnect other Android tools that were using this particular executable. Pairing keys stay intact.
+
+Per the owner's request, no Windows upgrade automation was added. To retest: connect with the older
+preview, close its window, then run 0.1.2 without manually stopping ADB. Accept the installer prompt
+to close its Android tools. Confirm installation completes without the DLL write error, reopen the
+app and reconnect using the TV's current port. Also try the path that removes the previous version first.
+The compilation of installer hooks is verified by the Windows packaging job; actual upgrade behavior
+is pending this user test. No MSI package is currently published.
