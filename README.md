@@ -9,6 +9,8 @@ Those operations have a concrete implementation plan and acceptance gates, not p
 
 Built with **Tauri 2 + Rust + Svelte 5 + TypeScript**. System webview, no Electron.
 
+![Companion overview using clearly labeled example TV data](docs/preview.png)
+
 - [Product scope](docs/PRODUCT.md): beginner flows, feature boundaries, completion states.
 - [Caveat register](docs/CAVEATS.md): evidence from the upstream scripts and this TCL setup.
 - [Architecture](docs/ARCHITECTURE.md): device identity, typed operations, recovery, secrets.
@@ -22,7 +24,7 @@ NSIS setup `.exe`, Linux an AppImage and `.deb`, macOS a `.dmg`. These are unsig
 A GitHub login may be needed to download CI artifacts; the installed app has no login requirement.
 See [testing instructions](docs/TESTING.md). Artifacts are available only after the workflow passes.
 
-Development: Node 22+ and pnpm, Rust stable, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Development: Node 24 and pnpm 12, Rust stable, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
 pnpm install --frozen-lockfile

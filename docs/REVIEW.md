@@ -13,8 +13,9 @@ Findings resolved in PRODUCT, ARCHITECTURE, TESTING and the milestone amendments
 - Native CI artifact generation and physical OS launch testing are separate acceptance checks.
 
 Local verification: Svelte check has zero errors/warnings; production frontend build and four
-state/validation tests passed. Three headless Playwright interaction/layout/reduced-motion tests passed;
-desktop and narrow screenshots reviewed. Native CI builds are in progress; physical platform launch
+state/validation tests passed. Four headless Playwright interaction/layout/reduced-motion/desktop-IPC-contract tests passed;
+desktop and narrow screenshots reviewed. Rust unit tests passed on all three native runners. Linux/macOS native installers built successfully;
+Windows packaging is in progress. Physical platform launch
 checks are separate from browser verification.
 No TV credentials or private backups are imported into this repository. The API keys used on the TCL
 remain in the original local environment/TV configuration and are unrelated to companion runtime.
