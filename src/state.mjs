@@ -26,8 +26,8 @@ export function parseEndpoint(value) {
 }
 export const scenarios = {
   existing: { model: 'Living room TV', manufacturer: 'TCL', androidVersion: '12',
-    home: 'com.gathin.tvhome/.MainActivity', packages: ['com.gathin.tvhome', 'org.example.player'],
-    disabled: ['org.example.recommendations', 'org.example.analytics'],
+    home: 'com.gathin.tvhome/.MainActivity', packages: ['com.gathin.tvhome', 'org.example.player', 'com.tcl.logkit', 'com.tcl.tv.plus', 'com.tcl.exhibit', 'com.google.android.feedback', 'com.google.android.play.games'],
+    disabled: ['com.tcl.logkit', 'com.google.android.feedback'],
     theme: {wallpaper: true, wallpaper_rotation_minutes: 30, wallpaper_dim: 40},
     isTv: true, errors: [], collectedAt: 'Demo snapshot' },
   fresh: { model: 'A new beginning', manufacturer: 'Android TV', androidVersion: '14',

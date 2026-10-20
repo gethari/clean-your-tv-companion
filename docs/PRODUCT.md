@@ -57,7 +57,7 @@ Fire TV: future adapter only, because launcher restrictions and firmware behavio
 | Demo scenarios and friendly state-aware dashboard | Yes | Yes |
 | Devices, mDNS discovery, manual connect and pairing | Yes | Yes, recovery refinement |
 | Current HOME, packages, launcher/theme observations | Yes | Yes, per-user enrichment |
-| Conservative package profiles | Explain only | Reviewed, versioned capability rules |
+| Conservative package profiles | Six sourced family comparison lists; no changes | Reviewed, versioned capability rules |
 | APK install and launcher handover | Planned, no action control | Verified source/hash/signature + rollback |
 | App preferences / dock / local wallpapers | Inspect safe values | Merge patch and preview |
 | Backup / resume / restore | Specification | Durable, identity-bound journal |

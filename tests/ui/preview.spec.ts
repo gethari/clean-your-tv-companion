@@ -76,3 +76,17 @@ for (const autoConnect of [true,false]) {
   }
  });
 }
+test('TV presets compare the existing setup and show protected features',async({page})=>{
+ await page.goto('/');
+ await page.getByRole('button',{name:'TV presets',exact:false}).click();
+ await expect(page.getByRole('heading',{name:'A preset, with context.'})).toBeVisible();
+ await expect(page.getByLabel('TV family')).toHaveValue('tcl');
+ const logkit=page.locator('article.preset-row').filter({hasText:'com.tcl.logkit'});
+ await expect(logkit.getByText('Already disabled',{exact:true})).toBeVisible();
+ const tvplus=page.locator('article.preset-row').filter({hasText:'com.tcl.tv.plus'});
+ await expect(tvplus.getByText('Available to review',{exact:true})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Features we leave alone'})).toBeVisible();
+ await expect(page.getByRole('button',{name:/disable|apply/i})).toHaveCount(0);
+ await page.selectOption('#tv-preset','sony');
+ await expect(page.getByText('com.sonyericsson.idd.agent',{exact:true})).toBeVisible();
+});
