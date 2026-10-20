@@ -12,7 +12,9 @@ Findings resolved in PRODUCT, ARCHITECTURE, TESTING and the milestone amendments
 - This iteration is an inspection/demo preview; setup/restore mutation milestones are deferred.
 - Native CI artifact generation and physical OS launch testing are separate acceptance checks.
 
-Initial local checks: Svelte check, frontend build and four state/validation tests passed. Headless UI
-and native CI builds are in progress; update this record with observed results before delivery.
+Local verification: Svelte check has zero errors/warnings; production frontend build and four
+state/validation tests passed. Three headless Playwright interaction/layout/reduced-motion tests passed;
+desktop and narrow screenshots reviewed. Native CI builds are in progress; physical platform launch
+checks are separate from browser verification.
 No TV credentials or private backups are imported into this repository. The API keys used on the TCL
 remain in the original local environment/TV configuration and are unrelated to companion runtime.
