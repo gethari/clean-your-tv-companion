@@ -14,8 +14,9 @@ Findings resolved in PRODUCT, ARCHITECTURE, TESTING and the milestone amendments
 
 Local verification: Svelte check has zero errors/warnings; production frontend build and four
 state/validation tests passed. Four headless Playwright interaction/layout/reduced-motion/desktop-IPC-contract tests passed;
-desktop and narrow screenshots reviewed. Rust unit tests passed on all three native runners. Linux/macOS native installers built successfully;
-Windows packaging is in progress. Physical platform launch
+desktop and narrow screenshots reviewed. Rust unit tests and native installer builds passed on Linux, Windows and macOS. The initial Linux
+AppImage was launched and its actual Tauri window was captured successfully. The user launched the
+initial Windows installer and reported the pairing-flow issue addressed below. Physical platform launch
 checks are separate from browser verification.
 No TV credentials or private backups are imported into this repository. The API keys used on the TCL
 remain in the original local environment/TV configuration and are unrelated to companion runtime.
@@ -31,3 +32,8 @@ excluded. Missing/ambiguous discovery leaves a focused manual connection field.
 ADB daemon startup now uses null output handles before captured client commands, to avoid Windows
 server handle inheritance prolonging output reads. Actual Windows retest remains required to establish
 whether this was also involved in the reported symptom. All command waits remain bounded.
+
+Verification for 0.1.1 at commit 863915c: Svelte check passed with no warnings, five state/validation
+tests passed, six Playwright interaction tests passed, and Rust tests plus native packaging passed
+on Windows, Linux and macOS in workflow run 39388773164. Updated Windows device-flow retest remains
+pending user verification. A first-release Windows/macOS signing gate is still open.

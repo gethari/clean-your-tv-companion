@@ -19,6 +19,8 @@ Built with **Tauri 2 + Rust + Svelte 5 + TypeScript**. System webview, no Electr
 
 ## Try it
 
+Download the [0.1.1 inspection preview](https://github.com/gethari/clean-your-tv-companion/releases/tag/v0.1.1-preview.1) for the pairing-flow fix. Existing authorization can be reused; use the current connection port from the TV.
+
 Download the latest successful **Desktop preview** workflow artifact from Actions: Windows provides an
 NSIS setup `.exe`, Linux an AppImage and `.deb`, macOS a `.dmg`. These are unsigned testing builds.
 A GitHub login may be needed to download CI artifacts; the installed app has no login requirement.
