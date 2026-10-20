@@ -25,8 +25,24 @@ fn adb_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         Err("Bundled Android tools are missing. Use a complete desktop installer; developers can set CYTV_ADB_PATH.".into())
     }
 }
+// Start the daemon without captured pipes: on Windows a newly spawned server can
+// inherit client output handles and keep a pairing command's pipes open.
+async fn ensure_server(path: &std::path::Path) -> Result<(), String> {
+    let mut command = Command::new(path);
+    command.arg("start-server").stdin(Stdio::null()).stdout(Stdio::null())
+        .stderr(Stdio::null()).kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let mut child = command.spawn().map_err(|_| "Could not start Android tools.")?;
+    let status = timeout(Duration::from_secs(12), child.wait()).await
+        .map_err(|_| "Android tools took too long to start. Close other Android tools and try again.")?
+        .map_err(|_| "Could not start Android tools.")?;
+    if status.success() { Ok(()) } else { Err("Android tools could not start. Check OS permissions and try again.".into()) }
+}
+
 async fn adb(app: &tauri::AppHandle, args: &[&str], input: Option<&str>) -> Result<String, String> {
     let path = adb_path(app)?;
+    ensure_server(&path).await?;
     let mut command = Command::new(path);
     command.args(args).stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);

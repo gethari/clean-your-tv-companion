@@ -1,6 +1,6 @@
 [package]
 name = "clean-your-tv-companion"
-version = "0.1.0"
+version = "0.1.1"
 description = "A local companion for Android TV"
 authors = ["Hari Haran"]
 edition = "2021"

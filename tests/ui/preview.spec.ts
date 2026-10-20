@@ -42,3 +42,37 @@ test('desktop UI inspects an existing TV without exposing configuration actions'
  expect(await page.evaluate(()=>(window as any).__TEST_CALLS__)).toEqual(['connect_device','inspect_device']);
  await expect(page.getByRole('button',{name:/install|apply|disable|restore/i})).toHaveCount(0);
 });
+for (const autoConnect of [true,false]) {
+ test(`pairing shows success and ${autoConnect ? 'continues to the matching TV' : 'prompts prominently for its connection port'}`,async({page})=>{
+  await page.addInitScript(({autoConnect})=>{
+   (window as any).__TEST_CALLS__=[];
+   (window as any).__TAURI_INTERNALS__={invoke:async(command:string,args:any)=>{
+    (window as any).__TEST_CALLS__.push({command,args});
+    if(command==='pair_device'||command==='connect_device') return null;
+    if(command==='discover') return autoConnect ? [
+      {endpoint:'192.168.1.99:12345',status:'device',kind:'Connected device'},
+      {endpoint:'192.168.1.50:46481',status:'Advertised · not yet inspected',kind:'Connection service'}
+    ] : [];
+    if(command==='inspect_device') return {model:'Paired TV',manufacturer:'Example',androidVersion:'12',home:'com.gathin.tvhome/.MainActivity',packages:['com.gathin.tvhome'],disabled:[],theme:{wallpaper:true},isTv:true,errors:[],collectedAt:'fixture'};
+    throw new Error('Unexpected command');
+   }};
+  },{autoConnect});
+  await page.goto('/');await page.getByRole('button',{name:'Find my TV'}).click();
+  await page.getByRole('button',{name:'First time? Pair with a code'}).click();
+  await page.getByLabel('Pairing address',{exact:true}).fill('192.168.1.50:39123');
+  await page.getByLabel('Six-digit pairing code').fill('123456');
+  await page.getByRole('button',{name:'Pair computer',exact:true}).click();
+  if(autoConnect){
+   await expect(page.getByText('● Live inspection')).toBeVisible();
+   await expect(page.getByText('Paired TV',{exact:true})).toBeVisible();
+   const calls=await page.evaluate(()=>(window as any).__TEST_CALLS__);
+   expect(calls.find((x:any)=>x.command==='connect_device').args.endpoint).toBe('192.168.1.50:46481');
+   expect(calls.find((x:any)=>x.command==='inspect_device').args.serial).toBe('192.168.1.50:46481');
+  }else{
+   await expect(page.getByText('Computer paired with your TV',{exact:true})).toBeVisible();
+   await expect(page.getByText('Pairing worked. Close the pairing-code popup')).toBeVisible();
+   await expect(page.getByLabel('Connection address',{exact:true})).toHaveValue('192.168.1.50:');
+   await expect(page.getByLabel('Connection address',{exact:true})).toBeFocused();
+  }
+ });
+}

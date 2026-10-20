@@ -19,3 +19,15 @@ Windows packaging is in progress. Physical platform launch
 checks are separate from browser verification.
 No TV credentials or private backups are imported into this repository. The API keys used on the TCL
 remain in the original local environment/TV configuration and are unrelated to companion runtime.
+
+## Windows pairing follow-up · 0.1.1
+
+User observed the TV accepted pairing but the desktop stayed on the connection screen. A confirmed
+UX defect: success text was below the fold and no connection/discovery followed pairing. The fix
+shows feedback at the top, displays a paired checkpoint, discovers the same IPv4 host, and connects
+automatically only when exactly one connection endpoint matches. Other TVs and pairing ports are
+excluded. Missing/ambiguous discovery leaves a focused manual connection field.
+
+ADB daemon startup now uses null output handles before captured client commands, to avoid Windows
+server handle inheritance prolonging output reads. Actual Windows retest remains required to establish
+whether this was also involved in the reported symptom. All command waits remain bounded.
