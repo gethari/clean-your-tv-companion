@@ -1,0 +1,20 @@
+import {test,expect} from '@playwright/test';
+test('capture documented screens using labeled demo data',async({page})=>{
+ await page.goto('/');
+ await expect(page.getByText('◌ Demo · no TV connected')).toBeVisible();
+ await page.screenshot({path:'docs/screenshots/overview.png',fullPage:true,animations:'disabled'});
+ await page.getByRole('button',{name:'Connect a TV',exact:false}).click();
+ await page.getByRole('button',{name:'First time? Pair with a code'}).click();
+ await expect(page.getByLabel('Six-digit pairing code')).toBeVisible();
+ await page.screenshot({path:'docs/screenshots/connect.png',fullPage:true,animations:'disabled'});
+ await page.getByRole('button',{name:'TV presets',exact:false}).click();
+ await page.selectOption('#tv-preset','tcl');
+ await expect(page.getByText('com.tcl.logkit',{exact:true})).toBeVisible();
+ await page.screenshot({path:'docs/screenshots/presets.png',fullPage:true,animations:'disabled'});
+ await page.selectOption('#scenario','fresh');
+ await expect(page.getByRole('heading',{name:'A fresh start for your TV.'})).toBeVisible();
+ await page.screenshot({path:'docs/screenshots/fresh-tv.png',fullPage:true,animations:'disabled'});
+ await page.selectOption('#scenario','interrupted');
+ await expect(page.getByRole('heading',{name:'Let’s reconnect the dots.'})).toBeVisible();
+ await page.screenshot({path:'docs/screenshots/reconnect.png',fullPage:true,animations:'disabled'});
+});
