@@ -1,4 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+pub mod launcher_protocol;
+pub mod launcher_transport;
+pub mod journal;
+pub mod transaction;
+mod personalization;
+mod media;
 use serde_json::{json, Value};
 use std::{net::Ipv4Addr, path::PathBuf, process::Stdio, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::Manager;
@@ -76,30 +82,112 @@ async fn adb(app: &tauri::AppHandle, args: &[&str], input: Option<&str>) -> Resu
 
 #[derive(Serialize)]
 struct Device { endpoint: String, status: String, kind: String }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct TvIdentity { serial: String, manufacturer: String, model: String, fingerprint: String, user: String }
+
+fn identity_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+        && !matches!(value.to_ascii_lowercase().as_str(), "unknown" | "null" | "none" | "0123456789abcdef")
+}
+async fn tv_identity(app: &tauri::AppHandle, serial: &str) -> Result<TvIdentity, String> {
+    if !serial_valid(serial) { return Err("Choose a valid discovered device.".into()); }
+    // One bounded, read-only probe; do not store an endpoint as device identity.
+    let output = adb(app, &["-s", serial, "shell", "getprop ro.serialno; getprop ro.product.manufacturer; getprop ro.product.model; getprop ro.build.fingerprint; am get-current-user; pm list features"], None).await?;
+    parse_identity(&output).ok_or_else(|| "This TV did not provide a reliable identity. Choose it again next time.".into())
+}
+fn parse_identity(output: &str) -> Option<TvIdentity> {
+    let lines: Vec<_> = output.lines().map(str::trim).collect();
+    if lines.len() < 6 || !lines[5..].contains(&"feature:android.software.leanback") { return None; }
+    if !lines[..4].iter().all(|v| identity_value(v)) || lines[4].is_empty()
+        || !lines[4].bytes().all(|c| c.is_ascii_digit()) { return None; }
+    Some(TvIdentity { serial: lines[0].into(), manufacturer: lines[1].into(), model: lines[2].into(), fingerprint: lines[3].into(), user: lines[4].into() })
+}
+fn remembered_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|_| "Could not locate local app preferences.")?.join("remembered-tv.json"))
+}
+#[tauri::command]
+async fn remember_device(app: tauri::AppHandle, serial: String) -> Result<(), String> {
+    let path = remembered_path(&app)?;
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(|_| "Could not save the selected TV locally.")?;
+    // A new explicit selection must not leave an older TV remembered if this probe fails.
+    match std::fs::remove_file(&path) {
+        Ok(()) => {},
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(_) => return Err("Could not replace the selected TV preference.".into()),
+    }
+    let identity = tv_identity(&app, &serial).await?;
+    // Remove stale preference before replacement; an interrupted write fails closed on next load.
+    let bytes = serde_json::to_vec(&identity).map_err(|_| "Could not save the selected TV.")?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    use std::io::Write;
+    let mut file = options.open(path).map_err(|_| "Could not save the selected TV locally.")?;
+    file.write_all(&bytes).map_err(|_| "Could not save the selected TV locally.".to_owned())
+}
+fn unique_remembered(matches: Vec<String>, uncertain: bool) -> Option<String> {
+    if !uncertain && matches.len() == 1 { matches.into_iter().next() } else { None }
+}
+#[tauri::command]
+async fn remembered_device(app: tauri::AppHandle, endpoints: Vec<String>) -> Result<Option<String>, String> {
+    let path = remembered_path(&app)?;
+    let Ok(bytes) = std::fs::read(path) else { return Ok(None) };
+    if bytes.len() > 4096 { return Ok(None); }
+    let Ok(remembered) = serde_json::from_slice::<TvIdentity>(&bytes) else { return Ok(None) };
+    let mut unique = endpoints;
+    unique.sort(); unique.dedup();
+    if unique.len() > 8 || unique.iter().any(|e| !serial_valid(e)) { return Ok(None); }
+    let mut matches = vec![];
+    let mut uncertain = false;
+    for endpoint in unique {
+        let probe = timeout(Duration::from_secs(5), async {
+            if endpoint_valid(&endpoint) { connect_device(app.clone(), endpoint.clone()).await?; }
+            tv_identity(&app, &endpoint).await
+        }).await;
+        match probe {
+            Ok(Ok(identity)) if identity == remembered => matches.push(endpoint),
+            Ok(Ok(_)) => {},
+            _ => uncertain = true,
+        }
+    }
+    // An unreadable candidate could be a duplicate identity. Ask rather than guessing.
+    Ok(unique_remembered(matches, uncertain))
+}
 #[tauri::command]
 async fn discover(app: tauri::AppHandle) -> Result<Vec<Device>, String> {
     let devices = adb(&app, &["devices"], None).await?;
+    let services = adb(&app, &["mdns", "services"], None).await.unwrap_or_default();
+    Ok(parse_discovery(&devices, &services))
+}
+fn parse_discovery(devices: &str, services: &str) -> Vec<Device> {
     let mut result = vec![];
+    let advertised: Vec<Vec<&str>> = services.lines().skip(1).map(|line| line.split_whitespace().collect())
+        .filter(|fields: &Vec<&str>| fields.len() >= 3 && endpoint_valid(fields[fields.len() - 1])).collect();
     for line in devices.lines().skip(1) {
         let mut fields = line.split_whitespace();
         if let (Some(serial), Some(status)) = (fields.next(), fields.next()) {
-            if serial_valid(serial) { result.push(Device { endpoint: serial.into(), status: status.into(), kind: "Connected device".into() }); }
-        }
-    }
-    // ADB's mDNS service list may be unavailable; manual connection remains usable.
-    if let Ok(services) = adb(&app, &["mdns", "services"], None).await {
-        for line in services.lines().skip(1) {
-            let fields: Vec<_> = line.split_whitespace().collect();
-            if let Some(address) = fields.last() {
-                if endpoint_valid(address) && !result.iter().any(|d| d.endpoint == *address) {
-                    let pairing = line.contains("_adb-tls-pairing");
-                    result.push(Device { endpoint: (*address).into(), status: "Advertised · not yet inspected".into(),
-                        kind: if pairing { "Pairing service".into() } else if line.contains("_adb-tls-connect") { "Connection service".into() } else { "Legacy connection service".into() } });
-                }
+            let canonical = advertised.iter().find_map(|service| {
+                let alias = format!("{}.{}", service[0], service[1]);
+                if serial == alias || serial == format!("{alias}.") { service.last().copied() } else { None }
+            }).unwrap_or(serial);
+            if serial_valid(canonical) && !result.iter().any(|d: &Device| d.endpoint == canonical) {
+                result.push(Device { endpoint: canonical.into(), status: status.into(), kind: "Connected device".into() });
             }
         }
     }
-    Ok(result)
+    // ADB's mDNS service list may be unavailable; manual connection remains usable.
+        for fields in advertised {
+            if let Some(address) = fields.last() {
+                if endpoint_valid(address) && !result.iter().any(|d| d.endpoint == *address) {
+                    let pairing = fields[1].contains("_adb-tls-pairing");
+                    result.push(Device { endpoint: (*address).into(), status: "Advertised · not yet inspected".into(),
+                        kind: if pairing { "Pairing service".into() } else if fields[1].contains("_adb-tls-connect") { "Connection service".into() } else { "Legacy connection service".into() } });
+                }
+            }
+        }
+    result
 }
 #[tauri::command]
 async fn connect_device(app: tauri::AppHandle, endpoint: String) -> Result<(), String> {
@@ -145,6 +233,28 @@ fn safe_theme(value: &str) -> Option<Value> {
     Some(Value::Object(clean))
 }
 #[tauri::command]
+async fn prepare_personalization(
+    app: tauri::AppHandle,
+    serial: String,
+    patch: launcher_protocol::SettingsPatch,
+    collections: Vec<Value>,
+) -> Result<journal::Review, String> {
+    let identity = tv_identity(&app, &serial).await?;
+    let identity_value = serde_json::to_value(&identity).map_err(|_| "Could not identify this TV.")?;
+    let root = app.path().app_data_dir().map_err(|_| "Could not locate the local journal.")?.join("operations");
+    let journal = journal::Journal::open(root)?;
+    let _guard = journal.lock(&identity_value)?;
+    let caps = launcher_transport::call_for_user(&app, &serial, &identity.user, launcher_transport::Method::Capabilities, json!({})).await?;
+    let caps = launcher_protocol::capabilities(caps).map_err(|_| "This launcher does not support recoverable personalization.")?;
+    launcher_protocol::validate_patch(&patch, &caps).map_err(|_| "These settings are not supported by this launcher.")?;
+    launcher_protocol::validate_collections(&collections, &caps).map_err(|_| "This collection exceeds the supported format or storage limits.")?;
+    let state = launcher_transport::call_for_user(&app, &serial, &identity.user, launcher_transport::Method::State, json!({})).await?;
+    if tv_identity(&app, &serial).await? != identity {
+        return Err("The TV or active user changed during review. Refresh and try again.".into());
+    }
+    journal.prepare(identity_value, &state, patch, collections)
+}
+#[tauri::command]
 async fn inspect_device(app: tauri::AppHandle, serial: String) -> Result<Value, String> {
     if !serial_valid(&serial) { return Err("Choose a discovered device or a valid local address.".into()); }
     let mut errors = vec![];
@@ -173,12 +283,50 @@ async fn inspect_device(app: tauri::AppHandle, serial: String) -> Result<Value, 
         "theme":theme,"errors":errors,"collectedAt":format!("Checked at Unix {collected}")}))
 }
 pub fn run() {
-    tauri::Builder::default().invoke_handler(tauri::generate_handler![discover, connect_device, pair_device, inspect_device])
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                let paths = paths.clone();
+                let window = window.clone();
+                if let Ok(root) = window.app_handle().path().app_data_dir() {
+                    tauri::async_runtime::spawn_blocking(move || {
+                        use tauri::Emitter;
+                        let batch = media::ingest_native_paths(&root, &paths);
+                        let _ = window.emit("media-imported", batch);
+                    });
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![discover, connect_device, pair_device, inspect_device, remember_device, remembered_device, prepare_personalization, personalization::personalization_state, personalization::apply_personalization, personalization::cancel_personalization, personalization::prepare_restore, media::pick_photo_files, media::pick_photo_folder, media::transform_image])
         .run(tauri::generate_context!()).expect("Could not start Clean Your TV");
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn discovery_collapses_mdns_alias_and_ip_for_the_same_endpoint() {
+        let devices = "List of devices attached\n192.168.1.20:43210 device\nadb-example._adb-tls-connect._tcp device\n";
+        let services = "List of discovered mdns services\nadb-example _adb-tls-connect._tcp 192.168.1.20:43210\nadb-pair _adb-tls-pairing._tcp 192.168.1.20:45678\n";
+        let found = parse_discovery(devices, services);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].endpoint, "192.168.1.20:43210");
+        assert_eq!(found[1].kind, "Pairing service");
+        assert_eq!(parse_discovery(devices, "").len(), 2);
+    }
+    #[test] fn identity_requires_tv_features_and_complete_values() {
+        let valid = "SERIAL123\nExample\nTV\nexample/build/version\n0\nfeature:android.software.leanback\n";
+        assert!(parse_identity(valid).is_some());
+        assert!(parse_identity(&valid.replace("SERIAL123", "unknown")).is_none());
+        assert!(parse_identity(&valid.replace("SERIAL123", "")).is_none());
+        assert!(parse_identity(&valid.replace("feature:android.software.leanback", "feature:android.hardware.telephony")).is_none());
+        assert_ne!(parse_identity(valid), parse_identity(&valid.replace("SERIAL123", "SERIAL456")));
+    }
+    #[test] fn reconnect_requires_one_certain_identity_match() {
+        assert_eq!(unique_remembered(vec!["192.168.1.2:43210".into()], false), Some("192.168.1.2:43210".into()));
+        assert_eq!(unique_remembered(vec!["one".into(), "two".into()], false), None);
+        assert_eq!(unique_remembered(vec!["one".into()], true), None);
+        assert_eq!(unique_remembered(vec![], true), None);
+    }
     #[test] fn endpoint_rejects_shell_and_public_hosts() {
         for invalid in ["8.8.8.8:5555", "192.168.1.2:0", "192.168.1.2:65536", "192.168.1.2:5555;id", "--help", "localhost:5555", "[::1]:5555"] { assert!(!endpoint_valid(invalid)); }
         for valid in ["192.168.1.2:46481", "10.0.0.2:5555", "172.16.0.2:1234"] { assert!(endpoint_valid(valid)); }

@@ -1,0 +1,16 @@
+{
+  "status": "source-checkpoint-offline-tested",
+  "repository": "https://github.com/gethari/cleanyourtv",
+  "branch": "feat/companion-owner-runtime",
+  "base_commit": "e14d13ad096929ef033d3afd4e6c3fabca2953e8",
+  "source_commit": "6534c9048946b7acc8baad1b20f253845a54c848",
+  "version_name": "2.5-companion.2",
+  "version_code": 8,
+  "signer_matches_existing_tv": true,
+  "published": false,
+  "includes_existing_owner_wallpaper_and_remote_additions": true,
+  "installed_candidate_source_commit": "31dba4c038e8abcdc9ab24b2738e27abf743b4d0",
+  "installed_candidate_apk_sha256": "d527f46bb9f14de9415a0d61fcbf730f297ee28b21583211364b0823cbb6aee6",
+  "latest_source_installed_on_tv": false,
+  "scheduling_capability_enabled": false
+}

@@ -1,0 +1,7 @@
+[
+ {"name":"supported","response":{"protocol_version":1,"features":["collections_v1","atomic_activation_v1","revision_checks_v1","readback_v1"],"limits":{"asset_bytes":20971520,"collection_bytes":268435456,"asset_count":200}},"editable":true},
+ {"name":"legacy","response":{"launcher_version":"2.4"},"editable":false},
+ {"name":"newer protocol","response":{"protocol_version":2,"features":["collections_v1","atomic_activation_v1","revision_checks_v1","readback_v1"],"limits":{"asset_bytes":20971520,"collection_bytes":268435456,"asset_count":200}},"editable":false},
+ {"name":"missing atomic activation","response":{"protocol_version":1,"features":["collections_v1","revision_checks_v1","readback_v1"],"limits":{"asset_bytes":20971520,"collection_bytes":268435456,"asset_count":200}},"editable":false},
+ {"name":"invalid storage limits","response":{"protocol_version":1,"features":["collections_v1","atomic_activation_v1","revision_checks_v1","readback_v1"],"limits":{"asset_bytes":0,"collection_bytes":1,"asset_count":200}},"editable":false}
+]

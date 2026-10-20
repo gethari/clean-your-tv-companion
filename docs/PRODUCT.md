@@ -23,8 +23,10 @@ Fire TV: future adapter only, because launcher restrictions and firmware behavio
 ## End-to-end flow
 
 1. Welcome: what you can do, what stays local, Try a demo, Find my TV.
-2. Find: discover already connected TVs and mDNS ADB connect/pair advertisements. A discovery event is
-   not proof of a TV. Show devices separately and require explicit selection. Manual IP + port is always
+2. Find: automatically discover already connected devices and mDNS ADB connect/pair advertisements on
+   native startup. A discovery event is not proof of a TV. Require selection for new or ambiguous TVs.
+   Reconnect only one previously selected TV after authorized identity verification; missing identity,
+   unreadable candidates or duplicate matches require selection. Browser demo never discovers devices. Manual IP + port is always
    present; explain guest Wi-Fi, Ethernet versus Wi-Fi, VPN and local-network permission failures.
 3. Authorize: illustrated remote instructions for developer mode. Explicit pairing and connection fields;
    never ask users to paste shell commands. Show the TV prompt and a waiting state. Modern TLS debugging

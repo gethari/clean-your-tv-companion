@@ -13,7 +13,10 @@ per-device exclusive mutation lock, cancellation and time/output limits. Do not 
 or ADB server overrides in production. Reuse an existing ADB server carefully; never kill a user's server
 as discovery cleanup. Isolated app-owned key/server strategy is a later explicit decision with migration.
 
-Preview IPC: `discover`, `connect_device(endpoint)`, `pair_device(endpoint, code)`, `inspect_device(serial)`.
+Preview IPC: `discover`, `connect_device(endpoint)`, `pair_device(endpoint, code)`, `inspect_device(serial)`,
+`remember_device(serial)` and `remembered_device(endpoints)`. Remembered identity is a local preference;
+it contains no provider credentials. ADB mDNS aliases are canonicalized to advertised endpoints before
+matching. An unreadable or duplicate identity match requires selection.
 Strict LAN endpoint syntax, separate pairing-code validation; code goes to ADB stdin, never logs/argv.
 Preview has no package, HOME or settings mutation IPC. Pairing creates persistent trust and ADB can create host keys/start its server; revoking trust is a TV-side action. Discovery is connected-device + mDNS discovery; subnet sweep is deferred,
 limited to user-selected private interface and explicit opt-in. mDNS does not identify manufacturer/OS.
@@ -95,3 +98,43 @@ an early GUI callback before invoking older uninstallers. Section hooks also cov
 installs and new uninstallers. This is upgrade/uninstall cleanup, not discovery cleanup. Other Android
 clients using this particular ADB server can disconnect briefly; a different installation's ADB process
 is not targeted. Host pairing keys are outside the installer payload and are preserved.
+
+## Launcher source and compatibility
+
+Verified 2026-10-20: upstream https://github.com/Gathin23/cleanyourtv publishes the source release
+v2.4.0 at 08ea2f9a8cbb9fcb8b4a792f30ca28710ccdaf6f (launcher versionName 2.4 / versionCode 5).
+The release has no attached APK assets. The maintained owner fork is https://github.com/gethari/cleanyourtv,
+branch feat/rotating-wallpapers at 1a9f9eac023be0483a843980d84fbf6717103f29. The fork has no published
+GitHub releases. The fork owner gethari owns the companion integration contract; upstream adoption
+requires separate maintainer review. No upstream approval is implied by local work.
+
+The existing TV reports launcher 2.3 and remains inspection-compatible. The v2.4 source uses an external
+config.json overlay and a local wallpaper player; neither version exposes the companion provider,
+atomic collection activation or revision checks. Personalization requires protocol version 1 and its
+mandatory capabilities, not a guessed APK version threshold. Until a compatible launcher build is
+verified, all existing versions remain read-only in the companion. The protocol is documented in
+LAUNCHER_PROTOCOL.md.
+
+The local protocol candidate is now pinned on owner fork branch feat/companion-owner-runtime at
+31dba4c (full hash and APK digest: integrations/launcher-release.json). Its base is the owner's actual
+installed runtime source e14d13ad096929ef033d3afd4e6c3fabca2953e8 plus the existing local Unsplash and
+remote-key additions. The newer public fork source omitted those additions, so it was not a compatible
+base for this TV. The delivered patch preserves them without including theme files or credentials.
+The candidate is locally built/tested, not a published upstream release. Launcher 2.5-companion.2
+(versionCode 8) was updated on the TV with its matching existing signer, without uninstalling app data.
+
+## Personalization review journal
+
+`prepare_personalization(serial, patch, collections)` verifies TV identity, protocol capabilities and
+current state, then writes a reviewable plan under OS app data / operations / plans. It does not write
+TV configuration. Plans expire after 15 minutes and bind to serial/manufacturer/model/firmware/user
+identity plus the observed configuration revision. Known settings are diffed against effective values;
+prior companion override values and absence are recorded separately. Exact old collection manifests
+are retained for restoration, and unrelated source settings are not copied into the journal.
+
+Each device has a native exclusive file lock shared across companion processes. Journal records use
+owner-only file permissions, a synced temporary file, atomic replacement and parent-directory sync
+on Unix. Tests inject interruptions before and after replacement, check an actual second-process lock,
+and verify no-op planning, stale identities/revisions, expiry and conflict-aware inverse patches.
+The original launcher-update backup is in private OS app data / launcher-updates, outside this repository.
+Native Linux behavior is verified; physical Windows/macOS acceptance remains a release gate.

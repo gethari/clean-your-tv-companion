@@ -30,3 +30,13 @@ Copy examples:
 - Lost connection: "Your TV went offline." / "Keep it awake and check the connection port on the TV."
 - Unsupported: "This TV uses a different system." / "This version supports Android TV and Google TV."
 - Partial setup: "A few things are ready. Let's check the rest." Never "Your TV is dirty" or a fake score.
+
+## Automatic connection feedback
+
+Native startup searches immediately. Search status has a Stop search action; cancellation invalidates
+late results. The TV illustration shows a gentle antenna scan only during discovery. Device rows reveal
+briefly as results arrive. Reduced-motion mode retains all status text without loops or transforms.
+The connection view shows Find your TV → Authorize → Check setup checkpoints. Pairing success persists
+even when the connection address is unavailable, with keyboard focus moved to the next useful field.
+A previously selected TV opens its dashboard only after identity verification. Unverified candidates
+remain choices; an advertisement is never labeled as a confirmed TV.

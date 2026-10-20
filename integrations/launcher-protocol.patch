@@ -1,0 +1,2655 @@
+From fc4dd6c1fe8854b62b7efdfd6d0669fde30bb71b Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Tue, 20 Oct 2026 19:22:24 +0530
+Subject: [PATCH 1/4] feat(launcher): add private companion transaction
+ protocol
+
+---
+ docs/specs/companion-protocol.md              | 118 ++++++++++
+ launcher/app/build.gradle                     |   7 +-
+ launcher/app/src/main/AndroidManifest.xml     |   5 +
+ .../com/gathin/tvhome/CompanionProvider.java  | 111 +++++++++
+ .../com/gathin/tvhome/CompanionStore.java     | 222 ++++++++++++++++++
+ .../main/java/com/gathin/tvhome/Config.java   |  59 ++++-
+ .../com/gathin/tvhome/HomeKeyService.java     |   4 +-
+ .../java/com/gathin/tvhome/MainActivity.java  |  44 ++--
+ .../com/gathin/tvhome/UnsplashWallpaper.java  | 195 +++++++++++++++
+ .../com/gathin/tvhome/WallpaperPlayer.java    | 186 +++++++++++++++
+ .../com/gathin/tvhome/WallpaperRotation.java  |  43 ++++
+ .../com/gathin/tvhome/CompanionStoreTest.java |  88 +++++++
+ .../gathin/tvhome/WallpaperRotationTest.java  |  68 ++++++
+ 13 files changed, 1115 insertions(+), 35 deletions(-)
+ create mode 100644 docs/specs/companion-protocol.md
+ create mode 100644 launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
+ create mode 100644 launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
+ create mode 100644 launcher/app/src/main/java/com/gathin/tvhome/UnsplashWallpaper.java
+ create mode 100644 launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
+ create mode 100644 launcher/app/src/main/java/com/gathin/tvhome/WallpaperRotation.java
+ create mode 100644 launcher/app/src/test/java/com/gathin/tvhome/CompanionStoreTest.java
+ create mode 100644 launcher/app/src/test/java/com/gathin/tvhome/WallpaperRotationTest.java
+
+diff --git a/docs/specs/companion-protocol.md b/docs/specs/companion-protocol.md
+new file mode 100644
+index 0000000..991875e
+--- /dev/null
++++ b/docs/specs/companion-protocol.md
+@@ -0,0 +1,118 @@
++# Companion launcher protocol · version 1
++
++Status: implementation contract. Existing launcher 2.3/2.4 builds do not implement this protocol.
++See ARCHITECTURE.md for source ownership and pinned legacy release evidence. The companion must
++require capabilities rather than inferring support from versionName. No wallpaper writes are enabled
++by this document alone.
++
++## Transport and caller boundary
++
++Authority: `com.gathin.tvhome.companion`; base URI: `content://com.gathin.tvhome.companion/v1`.
++Rust uses fixed `adb -s <validated-device> shell content call` operations. The Android provider accepts
++only the authorized Android shell UID (2000) or its own process UID, checked with Binder.getCallingUid
++at every entry point before accessing files or clearing caller identity. Other apps cannot call it.
++ADB authorization is the trust boundary; there is no network listener or cloud service.
++
++`call(method, arg, extras)` accepts a base64url UTF-8 JSON request in `arg` and returns a Bundle with
++one base64url JSON `reply` string. Payloads have no padding and contain only ASCII letters, digits,
++`-` and `_`; no command interpolation of JSON, filenames, credentials or user text. Envelope size is
++limited to 256 KiB decoded; media transfers use the separate bounded stream below. Unknown methods,
++protocol versions, unsafe identifiers and malformed envelopes fail before mutation. Every reply has
++`protocol_version: 1`, `request_id` (32 lowercase hex characters), `ok`, and either `data` or
++`error: {code, message}`. Errors never echo secrets or source paths.
++
++ContentProvider and Binder references:
++https://developer.android.com/reference/android/content/ContentProvider
++https://developer.android.com/reference/android/os/Binder#getCallingUid()
++
++## Capabilities and safe state
++
++`capabilities` takes `{protocol_version:1, request_id}` and returns:
++
++```json
++{"protocol_version":1,"request_id":"0123456789abcdef0123456789abcdef","ok":true,"data":{"launcher_version":"2.5-companion","features":["collections_v1","atomic_activation_v1","revision_checks_v1","readback_v1"],"limits":{"asset_bytes":20971520,"collection_bytes":268435456,"asset_count":200}}}
++```
++
++These four features are mandatory for any personalization. `theme_schedules_v1` and
++`private_credentials_v1` are separate optional features; absent features disable their controls.
++An absent provider, version other than 1, malformed limits or missing mandatory feature is read-only.
++Do not fall back to writing external config.json.
++
++`state` returns `{revision, settings, overrides, collections, active_collection, operation}`.
++`overrides` contains companion-owned values; `settings` overlays them on the existing theme. Removing
++a key removes only its companion override, revealing the existing theme value. The companion journals
++override presence/value separately from effective settings so restore can recover exact prior absence.
++The revision also covers legacy theme contents and TV-side preference values, so later manual changes
++produce a conflict even when an override currently masks them. `revision` is a
++64-character lowercase SHA-256 digest covering all persisted personalization state, including opaque
++unknown settings. `settings` contains only safe owned settings; credentials and unknown settings are
++excluded from readback. Unknown settings stay on the TV and contribute to revision checks. `operation`
++contains last activated request_id and result revision so a disconnected client can reconcile.
++`collections` exposes opaque collection IDs, hashes, byte sizes and playback preferences, never
++absolute paths. No secrets appear in capabilities, state, errors, logs or exports.
++
++## Typed patches
++
++A settings patch is `{set:{...},remove:[...]}`. Allowed keys are `wallpaper`,
++`wallpaper_rotation_minutes`, `wallpaper_dim`, `wallpaper_order`, `active_collection`, `theme_schedule`,
++`background_color`, `accent_color`, `reduced_motion`, and `theme_schedule_enabled`. Set and remove must not overlap. Changes
++merge with persisted configuration, preserving every unrelated/unknown key and its original value.
++Removal restores absence rather than a guessed default. Rotation is an integer from 1 through 1440
++minutes; dimming is an integer from 0 through 100; order is `sequential` or `shuffle`. Colors use
++`#RRGGBB`. IDs contain 32 lowercase hex characters. Theme schedules use a separately validated schema
++and are accepted only when `theme_schedules_v1` is advertised. Credentials never enter this patch.
++
++## Staging and streaming
++
++`stage` takes `{protocol_version,request_id,expected_revision,patch,collections:[{id,assets:[{sha256,bytes,mime}],order,interval_minutes}]}`.
++It checks revision, patch shape, feature support, unique IDs, safe hashes, MIME types (JPEG/PNG/WebP),
++individual/aggregate limits, available storage and rollback retention before making a durable session.
++The session ID is the request_id. Exact retries return the same session; reusing an ID with a different
++payload returns `request_conflict`. Staging does not change active config or the displayed collection.
++
++Assets are written using fixed `content write --uri` paths:
++`content://com.gathin.tvhome.companion/v1/sessions/<session-id>/assets/<sha256>`.
++Rust streams bytes on stdin. The provider returns a pipe, never an unrestricted private-file descriptor,
++and validates bytes against the session manifest, declared length, magic/decoded format, dimensions
++and SHA-256. Reject traversal, symlinks, duplicate concurrent writers and unlisted hashes. An incomplete
++or oversized stream is discarded; EOF alone does not acknowledge validity. Only verified complete
++assets become staged objects. Already verified hashes can be reused without retransmission.
++
++`validate` takes `{protocol_version,request_id,session_id}` and returns `{ready,missing_assets,revision}`.
++All assets must be verified, limits/storage rechecked and the expected revision still current. A stale
++revision returns `revision_conflict`; the companion must refresh/review rather than overwrite.
++
++## Activation, readback and recovery
++
++`activate` takes `{protocol_version,request_id,session_id,expected_revision}`. Under one launcher-side
++mutation lock, recheck revision, fsync durable session/asset metadata, and atomically replace a single
++active-state pointer/config revision. The persisted state includes operation identity so activation
++and its acknowledgment cannot disagree after restart. Only then refresh Home and return
++`{revision,operation_id}`. Zero exit status is not proof: the companion queries `state` and verifies
++operation ID, settings and referenced hashes. Repeating activation of the same session is idempotent.
++
++`result` takes `{protocol_version,request_id,operation_id}` and returns staged/validated/activated/
++discarded/unknown plus resulting revision. Query after disconnect; never blindly repeat an operation
++whose outcome is unknown. A crash before atomic replacement keeps the previous active state; after
++replacement it recovers the new state and operation ID. No partially activated collection is displayed.
++
++`discard` takes `{protocol_version,request_id,session_id}` and idempotently deletes only unactivated
++staging. It must not remove active or rollback-referenced media. Explicit safe-boundary cancellation
++uses discard after reconciliation. Stale unactivated sessions can expire after 24 hours, never active
++or rollback-referenced content. Immutable verified content is garbage-collected only when unreferenced.
++
++Restoration is another reviewed stage/activate transaction, using the companion journal's exact prior
++values and a fresh expected_revision. It never resets all settings or overwrites later manual changes.
++The TV retains previous referenced assets until the companion explicitly releases its rollback manifest;
++insufficient space to retain them blocks activation. APK/data downgrades are outside the protocol.
++
++## Error codes and verification
++
++Stable error codes: `unsupported_protocol`, `unsupported_feature`, `invalid_request`, `access_denied`,
++`revision_conflict`, `request_conflict`, `missing_assets`, `invalid_asset`, `storage_full`, `busy`,
++`unknown_session`, and `internal_error`. Failed calls are distinguishable from empty collections.
++
++Contract fixtures under tests/fixtures/launcher-protocol cover supported, legacy, newer and incomplete
++capabilities and merge behavior. The launcher must additionally verify unauthorized Binder callers,
++traversal, truncated streams, incorrect hashes, crash boundaries, stale revisions, idempotent activation,
++discard safety and private-field exclusion before any physical TV configuration test.
+diff --git a/launcher/app/build.gradle b/launcher/app/build.gradle
+index 4579341..2739be3 100644
+--- a/launcher/app/build.gradle
++++ b/launcher/app/build.gradle
+@@ -10,10 +10,12 @@ android {
+         applicationId 'com.gathin.tvhome'
+         minSdk 26
+         targetSdk 34
+-        versionCode 4
+-        versionName '2.3'
++        versionCode 7
++        versionName '2.5-companion.1'
+     }
+ 
++    buildFeatures { buildConfig true }
++
+     buildTypes {
+         release {
+             // R8 strips and optimises the code (AndroidX included): smaller APK, faster start on a slow TV CPU.
+@@ -36,4 +38,5 @@ dependencies {
+     implementation 'androidx.dynamicanimation:dynamicanimation:1.0.0'
+     // Test only (never in the APK): plain JVM tests for the module card validators, src/test.
+     testImplementation 'junit:junit:4.13.2'
++    testImplementation 'org.json:json:20240303'
+ }
+diff --git a/launcher/app/src/main/AndroidManifest.xml b/launcher/app/src/main/AndroidManifest.xml
+index cf9e6f5..3f8c0ef 100644
+--- a/launcher/app/src/main/AndroidManifest.xml
++++ b/launcher/app/src/main/AndroidManifest.xml
+@@ -7,6 +7,7 @@
+     <uses-feature android:name="android.hardware.wifi" android:required="false" />
+     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+ 
++    <uses-permission android:name="android.permission.INTERNET" />
+     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+     <!-- Needed since Android 10 to read the Wi-Fi network name for the network pill. Never requested at
+@@ -38,6 +39,10 @@
+         android:allowBackup="false"
+         android:localeConfig="@xml/locales_config">
+ 
++        <provider android:name=".CompanionProvider"
++            android:authorities="com.gathin.tvhome.companion"
++            android:exported="true" android:grantUriPermissions="false" />
++
+         <activity
+             android:name=".MainActivity"
+             android:exported="true"
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java b/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
+new file mode 100644
+index 0000000..dfa1337
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
+@@ -0,0 +1,111 @@
++package com.gathin.tvhome;
++
++import android.content.*;
++import android.database.Cursor;
++import android.graphics.BitmapFactory;
++import android.net.Uri;
++import android.os.*;
++import android.os.Process;
++import android.system.Os;
++import android.system.OsConstants;
++import android.util.Base64;
++import org.json.*;
++import java.io.*;
++import java.nio.charset.StandardCharsets;
++import java.util.*;
++import java.util.concurrent.*;
++
++/** Narrow ADB-authorized shell transport; no sockets and no caller-supplied file paths. */
++public final class CompanionProvider extends ContentProvider {
++    static final String ACTION_UPDATED="com.gathin.tvhome.COMPANION_UPDATED";
++    private static CompanionStore instance;
++    private static final ThreadPoolExecutor uploads=new ThreadPoolExecutor(2,2,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(4));
++    private static final ScheduledExecutorService timeouts=Executors.newSingleThreadScheduledExecutor();
++
++    static synchronized CompanionStore store(Context context) throws Exception {
++        Context app=context.getApplicationContext();
++        if(instance==null)instance=new CompanionStore(new File(app.getFilesDir(),"companion"),()->{
++            File dir=Config.dir(app);JSONObject theme=dir==null?null:Config.read(new File(dir,Config.FILE_NAME));
++            return new JSONObject().put("settings",theme==null?new JSONObject():theme)
++                .put("preferences",new JSONObject(app.getSharedPreferences(Config.SETTINGS_NAME,Context.MODE_PRIVATE).getAll()));
++        },directory->{
++            FileDescriptor fd=Os.open(directory.getPath(),OsConstants.O_RDONLY,0);
++            try{Os.fsync(fd);}finally{Os.close(fd);}
++        },(file,mime)->{
++            BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;
++            BitmapFactory.decodeFile(file.getPath(),options);
++            CompanionStore.require(options.outWidth>0 && options.outHeight>0 && options.outWidth<=16384 && options.outHeight<=16384
++                && (long)options.outWidth*options.outHeight<=33177600 && mime.equals(options.outMimeType),"invalid_asset");
++        });
++        return instance;
++    }
++    static JSONObject overlay(Context context,JSONObject theme) {
++        try{
++            JSONObject result=theme==null?new JSONObject():CompanionStore.copy(theme),overrides=store(context).overrides();
++            if(overrides.length()==0)return theme;
++            for(Iterator<String> it=overrides.keys();it.hasNext();){String key=it.next();result.put(key,overrides.get(key));}
++            return result;
++        }catch(Exception e){return theme;}
++    }
++    static List<File> selectedAssets(Context context) {
++        try{return store(context).selectedAssets();}catch(Exception e){return Collections.emptyList();}
++    }
++    static String revision(Context context) {
++        try{return store(context).state().getString("revision");}catch(Exception e){return "";}
++    }
++    static void caller() {
++        int uid=Binder.getCallingUid();
++        if(uid!=2000 && uid!=Process.myUid())throw new SecurityException("Companion access denied");
++    }
++    @Override public boolean onCreate(){return true;}
++    @Override public Bundle call(String method,String arg,Bundle extras) {
++        caller();String requestId="";JSONObject reply=new JSONObject();
++        try{
++            CompanionStore.require(arg!=null && arg.length()<=349526 && arg.matches("[A-Za-z0-9_-]+"),"invalid_request");
++            byte[] bytes=Base64.decode(arg,Base64.URL_SAFE|Base64.NO_PADDING|Base64.NO_WRAP);
++            CompanionStore.require(bytes.length<=262144,"invalid_request");JSONObject request=new JSONObject(new String(bytes,StandardCharsets.UTF_8));
++            requestId=request.getString("request_id");CompanionStore.require(CompanionStore.hex(requestId,32),"invalid_request");
++            CompanionStore.require(CompanionStore.integer(request.get("protocol_version"),1,1),"unsupported_protocol");
++            JSONObject data;CompanionStore store=store(getContext());
++            switch(method){
++                case "capabilities":data=new JSONObject().put("protocol_version",1).put("launcher_version",BuildConfig.VERSION_NAME)
++                    .put("features",new JSONArray(Arrays.asList("collections_v1","atomic_activation_v1","revision_checks_v1","readback_v1")))
++                    .put("limits",new JSONObject().put("asset_bytes",CompanionStore.ASSET_BYTES).put("collection_bytes",CompanionStore.TOTAL_BYTES).put("asset_count",CompanionStore.ASSET_COUNT));break;
++                case "state":data=store.state();break;
++                case "stage":data=store.stage(request);break;
++                case "validate":data=store.validate(request.getString("session_id"));break;
++                case "activate":data=store.activate(request);getContext().sendBroadcast(new Intent(ACTION_UPDATED).setPackage(getContext().getPackageName()));break;
++                case "result":data=store.result(request.getString("operation_id"));break;
++                case "discard":data=store.discard(request.getString("session_id"));break;
++                default:throw new CompanionStore.Failure("invalid_request");
++            }
++            reply.put("ok",true).put("data",data);
++        }catch(Exception error){
++            String code=error instanceof CompanionStore.Failure?((CompanionStore.Failure)error).code:
++                error instanceof JSONException || error instanceof IllegalArgumentException?"invalid_request":"internal_error";
++            try{reply.put("ok",false).put("error",new JSONObject().put("code",code).put("message","The launcher could not complete this operation."));}catch(JSONException ignored){}
++        }
++        try{reply.put("protocol_version",1).put("request_id",requestId);}catch(JSONException ignored){}
++        Bundle result=new Bundle();result.putString("reply",Base64.encodeToString(reply.toString().getBytes(StandardCharsets.UTF_8),Base64.URL_SAFE|Base64.NO_PADDING|Base64.NO_WRAP));return result;
++    }
++    @Override public ParcelFileDescriptor openFile(Uri uri,String mode) throws FileNotFoundException {
++        caller();final ParcelFileDescriptor[] pipe;
++        try{
++            List<String> parts=uri.getPathSegments();CompanionStore.require("w".equals(mode) && parts.size()==5 && "v1".equals(parts.get(0)) && "sessions".equals(parts.get(1)) && "assets".equals(parts.get(3)),"invalid_request");
++            String session=parts.get(2),sha=parts.get(4);CompanionStore.require(CompanionStore.hex(session,32) && CompanionStore.hex(sha,64),"invalid_request");
++            CompanionStore store=store(getContext());store.session(session);pipe=ParcelFileDescriptor.createReliablePipe();
++            try{uploads.execute(()->{
++                ScheduledFuture<?> timeout=timeouts.schedule(()->{try{pipe[0].closeWithError("Transfer timed out");}catch(IOException ignored){}},60,TimeUnit.SECONDS);
++                try(InputStream in=new ParcelFileDescriptor.AutoCloseInputStream(pipe[0])){store.receive(session,sha,in);}
++                catch(Exception failure){try{pipe[0].closeWithError("Asset rejected");}catch(IOException ignored){}}
++                finally{timeout.cancel(false);}
++            });}catch(RejectedExecutionException e){pipe[0].close();pipe[1].close();throw e;}
++            return pipe[1];
++        }catch(Exception e){throw new FileNotFoundException("Companion asset transfer unavailable");}
++    }
++    @Override public String getType(Uri uri){caller();return "application/octet-stream";}
++    @Override public Cursor query(Uri uri,String[] p,String s,String[] a,String o){caller();throw new UnsupportedOperationException();}
++    @Override public Uri insert(Uri uri,ContentValues v){caller();throw new UnsupportedOperationException();}
++    @Override public int update(Uri uri,ContentValues v,String s,String[] a){caller();throw new UnsupportedOperationException();}
++    @Override public int delete(Uri uri,String s,String[] a){caller();throw new UnsupportedOperationException();}
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java b/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
+new file mode 100644
+index 0000000..5162e55
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
+@@ -0,0 +1,222 @@
++package com.gathin.tvhome;
++
++import org.json.JSONArray;
++import org.json.JSONObject;
++import java.io.*;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.*;
++import java.security.MessageDigest;
++import java.util.*;
++
++/** Pure transaction store; Android transport/caller checks live in CompanionProvider. */
++final class CompanionStore {
++    static final long ASSET_BYTES = 20L * 1024 * 1024, TOTAL_BYTES = 256L * 1024 * 1024;
++    static final int ASSET_COUNT = 200;
++    static final Set<String> KEYS = new HashSet<>(Arrays.asList("wallpaper", "wallpaper_rotation_minutes",
++        "wallpaper_dim", "wallpaper_order", "active_collection", "background_color", "accent_color", "reduced_motion"));
++    interface Source { JSONObject read() throws Exception; }
++    interface Sync { void directory(File directory) throws Exception; }
++    interface ImageCheck { void verify(File image, String mime) throws Exception; }
++    static final class Failure extends Exception {
++        final String code;
++        Failure(String code) { super(code); this.code = code; }
++    }
++    final File root, sessions, assets;
++    private final Source source;
++    private final Sync sync;
++    private final ImageCheck images;
++    private final Set<String> writers = new HashSet<>();
++
++    CompanionStore(File root, Source source, Sync sync, ImageCheck images) throws Exception {
++        this.root = root; this.source = source; this.sync = sync; this.images = images;
++        sessions = new File(root, "sessions"); assets = new File(root, "assets");
++        if ((!sessions.isDirectory() && !sessions.mkdirs()) || (!assets.isDirectory() && !assets.mkdirs())) throw new IOException("storage");
++    }
++    static boolean hex(String value, int length) { return value != null && value.matches("[a-f0-9]{" + length + "}"); }
++    static void require(boolean valid, String error) throws Failure { if (!valid) throw new Failure(error); }
++    static String canonical(Object value) throws Exception {
++        if (value instanceof JSONObject) {
++            JSONObject object = (JSONObject) value;
++            List<String> keys = new ArrayList<>(); object.keys().forEachRemaining(keys::add); Collections.sort(keys);
++            List<String> values = new ArrayList<>();
++            for (String key : keys) values.add(JSONObject.quote(key) + ":" + canonical(object.get(key)));
++            return "{" + String.join(",", values) + "}";
++        }
++        if (value instanceof JSONArray) {
++            JSONArray array = (JSONArray) value; List<String> values = new ArrayList<>();
++            for (int i=0; i<array.length(); i++) values.add(canonical(array.get(i)));
++            return "[" + String.join(",", values) + "]";
++        }
++        if(value==null || value==JSONObject.NULL)return "null";
++        if(value instanceof String)return JSONObject.quote((String)value);
++        if(value instanceof Number)return JSONObject.numberToString((Number)value);
++        return value.toString();
++    }
++    static String hash(byte[] data) throws Exception {
++        byte[] bytes = MessageDigest.getInstance("SHA-256").digest(data); StringBuilder text = new StringBuilder();
++        for (byte b : bytes) text.append(String.format(Locale.ROOT, "%02x", b & 255));
++        return text.toString();
++    }
++    static String hash(File file) throws Exception {
++        MessageDigest digest = MessageDigest.getInstance("SHA-256"); byte[] bytes = new byte[65536];
++        try (InputStream in = new FileInputStream(file)) { int read; while ((read=in.read(bytes))!=-1) digest.update(bytes,0,read); }
++        StringBuilder text = new StringBuilder(); for (byte b : digest.digest()) text.append(String.format(Locale.ROOT,"%02x",b&255)); return text.toString();
++    }
++    static JSONObject copy(JSONObject object) throws Exception { return new JSONObject(object.toString()); }
++    JSONObject read(File file, JSONObject fallback) throws Exception {
++        if (!file.exists()) return copy(fallback);
++        require(file.length()<=262144, "invalid_request");
++        return new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
++    }
++    void atomic(File file, JSONObject value) throws Exception {
++        byte[] bytes = canonical(value).getBytes(StandardCharsets.UTF_8); require(bytes.length<=262144,"storage_full");
++        File temp = new File(file.getParentFile(), file.getName()+".tmp");
++        try (FileOutputStream out = new FileOutputStream(temp)) { out.write(bytes); out.getFD().sync(); }
++        Files.move(temp.toPath(),file.toPath(),StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);
++        sync.directory(file.getParentFile());
++    }
++    JSONObject active() throws Exception {
++        return read(new File(root,"active.json"),new JSONObject().put("settings",new JSONObject()).put("collections",new JSONArray()).put("operations",new JSONObject()));
++    }
++    String revision(JSONObject active, JSONObject legacy) throws Exception {
++        return hash(canonical(new JSONObject().put("settings",active.getJSONObject("settings"))
++            .put("collections",active.getJSONArray("collections")).put("source",legacy)).getBytes(StandardCharsets.UTF_8));
++    }
++    static JSONObject safe(JSONObject object) throws Exception {
++        JSONObject result = new JSONObject();
++        for (String key : KEYS) if (object.has(key)) result.put(key,object.get(key));
++        return result;
++    }
++    synchronized JSONObject state() throws Exception {
++        JSONObject active = active(), legacy = source.read(), effective = copy(legacy.optJSONObject("settings") == null ? new JSONObject() : legacy.getJSONObject("settings"));
++        JSONObject overrides = active.getJSONObject("settings");
++        for (Iterator<String> it=overrides.keys();it.hasNext();) { String key=it.next(); effective.put(key,overrides.get(key)); }
++        return new JSONObject().put("revision",revision(active,legacy)).put("settings",safe(effective)).put("overrides",safe(overrides))
++            .put("collections",active.getJSONArray("collections")).put("active_collection",effective.opt("active_collection"))
++            .put("operation",active.optJSONObject("last_operation"));
++    }
++    static boolean integer(Object value, long min, long max) {
++        if (!(value instanceof Number)) return false;
++        double number=((Number)value).doubleValue(); return number>=min && number<=max && number==Math.floor(number);
++    }
++    static void patch(JSONObject patch) throws Exception {
++        for (Iterator<String> it=patch.keys();it.hasNext();) require(Arrays.asList("set","remove").contains(it.next()),"invalid_request");
++        JSONObject set=patch.optJSONObject("set"); JSONArray remove=patch.optJSONArray("remove");
++        require(!patch.has("set") || set!=null,"invalid_request"); require(!patch.has("remove") || remove!=null,"invalid_request");
++        if(set==null)set=new JSONObject(); if(remove==null)remove=new JSONArray();
++        Set<String> removed=new HashSet<>();
++        for(int i=0;i<remove.length();i++) {
++            String key=remove.getString(i); require(KEYS.contains(key) && !set.has(key) && removed.add(key),"invalid_request");
++        }
++        for(Iterator<String> it=set.keys();it.hasNext();) {
++            String key=it.next(); require(KEYS.contains(key),"unsupported_feature"); Object value=set.get(key); boolean valid;
++            switch(key) {
++                case "wallpaper": case "reduced_motion": valid=value instanceof Boolean;break;
++                case "wallpaper_rotation_minutes": valid=integer(value,1,1440);break;
++                case "wallpaper_dim": valid=integer(value,0,100);break;
++                case "wallpaper_order":valid=value instanceof String && Arrays.asList("sequential","shuffle").contains(value);break;
++                case "active_collection":valid=value instanceof String && hex((String)value,32);break;
++                default:valid=value instanceof String && ((String)value).matches("#[a-fA-F0-9]{6}");
++            }
++            require(valid,"invalid_request");
++        }
++    }
++    private File sessionFile(String id) throws Exception { require(hex(id,32),"invalid_request"); return new File(sessions,id+".json"); }
++    JSONObject session(String id) throws Exception { File file=sessionFile(id); require(file.isFile(),"unknown_session"); JSONObject value=read(file,new JSONObject());require(!value.optBoolean("discarded",false),"unknown_session");return value; }
++    private JSONObject manifestAsset(JSONObject session,String sha) throws Exception {
++        require(hex(sha,64),"invalid_request"); JSONArray collections=session.getJSONArray("collections");
++        for(int i=0;i<collections.length();i++) {
++            JSONArray list=collections.getJSONObject(i).getJSONArray("assets");
++            for(int j=0;j<list.length();j++) if(sha.equals(list.getJSONObject(j).getString("sha256"))) return list.getJSONObject(j);
++        }
++        throw new Failure("invalid_asset");
++    }
++    private void manifest(JSONArray collections) throws Exception {
++        require(collections.length()<=20,"invalid_request"); long total=0; int count=0; Set<String> ids=new HashSet<>();
++        for(int i=0;i<collections.length();i++) {
++            JSONObject collection=collections.getJSONObject(i);for(Iterator<String> key=collection.keys();key.hasNext();)require(Arrays.asList("id","assets","order","interval_minutes").contains(key.next()),"invalid_request"); String id=collection.getString("id"); require(hex(id,32) && ids.add(id),"invalid_request");
++            require(Arrays.asList("sequential","shuffle").contains(collection.getString("order")),"invalid_request");
++            require(integer(collection.get("interval_minutes"),1,1440),"invalid_request");
++            JSONArray list=collection.getJSONArray("assets"); require(list.length()>0,"invalid_request"); Set<String> hashes=new HashSet<>();
++            for(int j=0;j<list.length();j++) {
++                JSONObject asset=list.getJSONObject(j);for(Iterator<String> key=asset.keys();key.hasNext();)require(Arrays.asList("sha256","bytes","mime").contains(key.next()),"invalid_request"); String sha=asset.getString("sha256");
++                require(hex(sha,64) && hashes.add(sha) && integer(asset.get("bytes"),1,ASSET_BYTES),"invalid_asset");
++                require(Arrays.asList("image/jpeg","image/png","image/webp").contains(asset.getString("mime")),"invalid_asset");
++                total+=asset.getLong("bytes"); count++;
++            }
++        }
++        require(total<=TOTAL_BYTES && count<=ASSET_COUNT,"storage_full");
++        require(root.getUsableSpace()>total+1024*1024,"storage_full");
++    }
++    synchronized JSONObject stage(JSONObject request) throws Exception {
++        String id=request.getString("request_id"); File file=sessionFile(id);
++        if(file.exists()) { JSONObject old=read(file,new JSONObject());require(!old.optBoolean("discarded",false),"request_conflict"); require(canonical(old.getJSONObject("request")).equals(canonical(request)),"request_conflict"); return new JSONObject().put("session_id",id); }
++        require(request.getString("expected_revision").equals(state().getString("revision")),"revision_conflict");
++        patch(request.getJSONObject("patch")); JSONArray collections=request.getJSONArray("collections"); manifest(collections);
++        JSONObject session=new JSONObject().put("request",copy(request)).put("expected_revision",request.getString("expected_revision"))
++            .put("patch",request.getJSONObject("patch")).put("collections",collections).put("created",System.currentTimeMillis());
++        atomic(file,session); return new JSONObject().put("session_id",id);
++    }
++    void receive(String id,String sha,InputStream in) throws Exception {
++        JSONObject spec; String token=id+":"+sha;
++        synchronized(this) { spec=manifestAsset(session(id),sha); require(writers.add(token),"busy"); }
++        File temp=new File(assets,sha+"."+id+".part");
++        try {
++            long total=0; byte[] bytes=new byte[65536];
++            try(FileOutputStream out=new FileOutputStream(temp)) {
++                int n; while((n=in.read(bytes))!=-1) {total+=n;require(total<=spec.getLong("bytes") && total<=ASSET_BYTES,"invalid_asset");out.write(bytes,0,n);}
++                require(total==spec.getLong("bytes"),"invalid_asset");out.getFD().sync();
++            }
++            require(hash(temp).equals(sha),"invalid_asset"); images.verify(temp,spec.getString("mime"));
++            synchronized(this) {
++                session(id); Files.move(temp.toPath(),new File(assets,sha).toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);sync.directory(assets);
++            }
++        } finally { Files.deleteIfExists(temp.toPath()); synchronized(this){writers.remove(token);} }
++    }
++    synchronized JSONObject validate(String id) throws Exception {
++        JSONObject session=session(id); require(session.getString("expected_revision").equals(state().getString("revision")),"revision_conflict");
++        JSONArray collections=session.getJSONArray("collections");manifest(collections);JSONArray missing=new JSONArray();
++        for(int i=0;i<collections.length();i++) {
++            JSONArray list=collections.getJSONObject(i).getJSONArray("assets");
++            for(int j=0;j<list.length();j++) {
++                JSONObject spec=list.getJSONObject(j);String sha=spec.getString("sha256");File file=new File(assets,sha);
++                if(!file.isFile() || file.length()!=spec.getLong("bytes") || !hash(file).equals(sha)) missing.put(sha);
++            }
++        }
++        return new JSONObject().put("ready",missing.length()==0).put("missing_assets",missing).put("revision",state().getString("revision"));
++    }
++    synchronized JSONObject activate(JSONObject request) throws Exception {
++        String id=request.getString("session_id"), op=request.getString("request_id");require(hex(op,32),"invalid_request");
++        JSONObject active=active(), operations=active.getJSONObject("operations");
++        for(Iterator<String> it=operations.keys();it.hasNext();) {String previous=it.next();JSONObject result=operations.getJSONObject(previous);if(id.equals(result.getString("session_id")))return new JSONObject().put("revision",result.getString("revision")).put("operation_id",previous);}
++        require(request.getString("expected_revision").equals(state().getString("revision")),"revision_conflict");
++        JSONObject checked=validate(id);require(checked.getBoolean("ready"),"missing_assets");JSONObject session=session(id), patch=session.getJSONObject("patch");
++        JSONObject values=active.getJSONObject("settings"),set=patch.optJSONObject("set");JSONArray remove=patch.optJSONArray("remove");
++        if(remove!=null)for(int i=0;i<remove.length();i++)values.remove(remove.getString(i));
++        if(set!=null)for(Iterator<String> it=set.keys();it.hasNext();) {String key=it.next();values.put(key,set.get(key));}
++        JSONArray merged=active.getJSONArray("collections"),incoming=session.getJSONArray("collections");
++        for(int i=0;i<incoming.length();i++) {JSONObject collection=incoming.getJSONObject(i);int found=-1;for(int j=0;j<merged.length();j++)if(merged.getJSONObject(j).getString("id").equals(collection.getString("id")))found=j;if(found<0)merged.put(collection);else merged.put(found,collection);}
++        String selected=values.optString("active_collection","");if(!selected.isEmpty()) {boolean exists=false;for(int i=0;i<merged.length();i++)exists|=merged.getJSONObject(i).getString("id").equals(selected);require(exists,"invalid_request");}
++        active.put("collections",merged);String revision=revision(active,source.read());
++        require(revision(active(),source.read()).equals(request.getString("expected_revision")),"revision_conflict");
++        require(operations.length()<1000,"storage_full");JSONObject result=new JSONObject().put("session_id",id).put("revision",revision);
++        operations.put(op,result);active.put("last_operation",new JSONObject().put("request_id",op).put("session_id",id).put("revision",revision));
++        atomic(new File(root,"active.json"),active);
++        return new JSONObject().put("revision",revision).put("operation_id",op);
++    }
++    synchronized JSONObject result(String operation) throws Exception {
++        require(hex(operation,32),"invalid_request");JSONObject found=active().getJSONObject("operations").optJSONObject(operation);
++        return found==null?new JSONObject().put("status","unknown"):copy(found).put("status","activated");
++    }
++    synchronized JSONObject discard(String id) throws Exception {
++        for(Iterator<String> it=writers.iterator();it.hasNext();)require(!it.next().startsWith(id+":"),"busy");
++        JSONObject operations=active().getJSONObject("operations");for(Iterator<String> it=operations.keys();it.hasNext();)require(!id.equals(operations.getJSONObject(it.next()).getString("session_id")),"request_conflict");
++        File file=sessionFile(id);if(file.isFile()){JSONObject value=read(file,new JSONObject());value.put("discarded",true);atomic(file,value);}return new JSONObject().put("status","discarded");
++    }
++    synchronized JSONObject overrides() throws Exception {return copy(active().getJSONObject("settings"));}
++    synchronized List<File> selectedAssets() throws Exception {
++        JSONObject active=active();String selected=active.getJSONObject("settings").optString("active_collection","");List<File> result=new ArrayList<>();
++        JSONArray collections=active.getJSONArray("collections");for(int i=0;i<collections.length();i++) {JSONObject c=collections.getJSONObject(i);if(!selected.equals(c.getString("id")))continue;JSONArray list=c.getJSONArray("assets");for(int j=0;j<list.length();j++){String sha=list.getJSONObject(j).getString("sha256");if(hex(sha,64)){File f=new File(assets,sha);if(f.isFile())result.add(f);}}}
++        return result;
++    }
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/Config.java b/launcher/app/src/main/java/com/gathin/tvhome/Config.java
+index 6b663b4..3e33ca5 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/Config.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/Config.java
+@@ -57,7 +57,11 @@ final class Config {
+     /** Time-of-day backdrop, 0 to 100 (config.xml, sky_intensity); 0 keeps the plain background. */
+     final int skyIntensity;
+     /** Full-screen picture behind the launcher, or null for the plain colour. */
++    final boolean wallpaperEnabled;
+     final File wallpaper;
++    final List<File> wallpapers;
++    final int wallpaperRotationMinutes;
++    final int wallpaperDim;
+     /** Whether the overlay file was present and parsed. */
+     final boolean overlayApplied;
+     /** Festive skin from a theme (festival, festival_until, greeting, accent_color); {@link Festival#NONE} if none. */
+@@ -68,7 +72,8 @@ final class Config {
+                    int columns, int rowsBelowDock, boolean animations, boolean advancedEffects,
+                    boolean shamsiDate, boolean moduleCards, boolean reducedMotion, String vpnApp,
+                    boolean showHomeSettingsShortcut, int backgroundColor, int skyIntensity,
+-                   File wallpaper, boolean overlayApplied, Festival festival) {
++                   boolean wallpaperEnabled, File wallpaper, List<File> wallpapers, int wallpaperRotationMinutes, int wallpaperDim,
++                   boolean overlayApplied, Festival festival) {
+         this.dockApps = Collections.unmodifiableList(dockApps);
+         this.hiddenApps = Collections.unmodifiableList(hiddenApps);
+         this.liveTvPackage = liveTvPackage;
+@@ -87,7 +92,11 @@ final class Config {
+         this.showHomeSettingsShortcut = showHomeSettingsShortcut;
+         this.backgroundColor = backgroundColor;
+         this.skyIntensity = skyIntensity;
++        this.wallpaperEnabled = wallpaperEnabled;
+         this.wallpaper = wallpaper;
++        this.wallpapers = Collections.unmodifiableList(wallpapers);
++        this.wallpaperRotationMinutes = wallpaperRotationMinutes;
++        this.wallpaperDim = wallpaperDim;
+         this.overlayApplied = overlayApplied;
+         this.festival = festival;
+     }
+@@ -97,6 +106,22 @@ final class Config {
+         return ctx.getExternalFilesDir(null);
+     }
+ 
++    static int[] settingsKeyScancodes(Context context) {
++        int[] fallback = context.getResources().getIntArray(R.array.settings_key_scancodes);
++        return settingsKeyCodes(context, "settings_key_scancodes", fallback);
++    }
++
++    static int[] settingsKeycodes(Context context) {
++        int[] fallback = context.getResources().getIntArray(R.array.settings_key_keycodes);
++        return settingsKeyCodes(context, "settings_key_keycodes", fallback);
++    }
++
++    private static int[] settingsKeyCodes(Context context, String key, int[] fallback) {
++        File directory = dir(context);
++        JSONObject json = read(directory == null ? null : new File(directory, FILE_NAME));
++        return json == null ? fallback : intArray(json, key, fallback);
++    }
++
+     static Config load(Context ctx) {
+         Resources res = ctx.getResources();
+         List<String> dock = new ArrayList<>(Arrays.asList(res.getStringArray(R.array.dock_apps)));
+@@ -121,7 +146,7 @@ final class Config {
+ 
+         File dir = dir(ctx);
+         File file = dir != null ? new File(dir, FILE_NAME) : null;
+-        JSONObject json = read(file);
++        JSONObject json = CompanionProvider.overlay(ctx, read(file));
+         if (json != null) {
+             applied = true;
+             dock = stringList(json, "dock_apps", dock);
+@@ -155,6 +180,15 @@ final class Config {
+         if (wallpaper != null && !(wallpaper.isFile() && wallpaper.length() > 0)) wallpaper = null;
+         // A theme can also switch the wallpaper off while the file is still there.
+         if (json != null && json.has("wallpaper") && !bool(json, "wallpaper", true)) wallpaper = null;
++        int rotationMinutes = json == null ? 0 : integer(json, "wallpaper_rotation_minutes", 0, 0, 1440);
++        int wallpaperDim = json == null ? 0 : integer(json, "wallpaper_dim", 0, 0, 100);
++        List<File> wallpapers = new ArrayList<>();
++        if (rotationMinutes > 0 && dir != null && (json == null || bool(json, "wallpaper", true))) {
++            wallpapers.addAll(WallpaperRotation.images(new File(dir, "wallpapers")));
++        }
++        if (wallpapers.isEmpty() && wallpaper != null) wallpapers.add(wallpaper);
++        List<File> companionImages = CompanionProvider.selectedAssets(ctx);
++        if ((json == null || bool(json, "wallpaper", true)) && !companionImages.isEmpty()) { wallpapers.clear(); wallpapers.addAll(companionImages); }
+         // A festive skin comes only from a theme; config.xml has no festival.
+         Festival festival = json == null ? Festival.NONE : Festival.parse(string(json, "festival", ""),
+                 string(json, "festival_until", ""), string(json, "greeting", ""), string(json, "accent_color", ""));
+@@ -162,7 +196,9 @@ final class Config {
+         return new Config(dock, hidden, liveTv, liveTvAction, panelService, panelAction, inputAction,
+                 Math.max(1, columns), Math.max(0, rowsBelow), animations, advancedEffects,
+                 shamsi, moduleCards, reducedMotion, vpn, homeSettings, background,
+-                Math.max(0, Math.min(100, skyIntensity)), wallpaper, applied, festival);
++                Math.max(0, Math.min(100, skyIntensity)), json == null || bool(json, "wallpaper", true),
++                wallpaper, wallpapers, rotationMinutes,
++                wallpaperDim, applied, festival);
+     }
+ 
+     private static void syncThemeChoices(SharedPreferences choices, File dir, File config) {
+@@ -199,7 +235,7 @@ final class Config {
+     }
+ 
+     /** Reads and parses the overlay; any problem means "no overlay", never a crash on the home screen. */
+-    private static JSONObject read(File file) {
++    static JSONObject read(File file) {
+         if (file == null || !file.isFile()) return null;
+         if (file.length() > 64 * 1024) {
+             Log.w(TAG, "ignoring " + file + ": larger than 64 KB");
+@@ -235,6 +271,21 @@ final class Config {
+         return i < min || i > max ? fallback : i;
+     }
+ 
++    private static int[] intArray(JSONObject object, String key, int[] fallback) {
++        Object value = object.opt(key);
++        if (!(value instanceof JSONArray)) return fallback;
++        JSONArray array = (JSONArray) value;
++        if (array.length() > 32) return fallback;
++        int[] result = new int[array.length()];
++        for (int i = 0; i < array.length(); i++) {
++            Object item = array.opt(i);
++            if (!(item instanceof Number)) return fallback;
++            result[i] = ((Number) item).intValue();
++            if (result[i] < 1) return fallback;
++        }
++        return result;
++    }
++
+     private static int color(JSONObject o, String key, int fallback) {
+         Object v = o.opt(key);
+         if (!(v instanceof String)) return fallback;
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/HomeKeyService.java b/launcher/app/src/main/java/com/gathin/tvhome/HomeKeyService.java
+index ad79b3b..2182682 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/HomeKeyService.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/HomeKeyService.java
+@@ -24,8 +24,8 @@ public class HomeKeyService extends AccessibilityService {
+     @Override
+     protected void onServiceConnected() {
+         super.onServiceConnected();
+-        settingsScancodes = getResources().getIntArray(R.array.settings_key_scancodes);
+-        settingsKeycodes = getResources().getIntArray(R.array.settings_key_keycodes);
++        settingsScancodes = Config.settingsKeyScancodes(this);
++        settingsKeycodes = Config.settingsKeycodes(this);
+     }
+ 
+     private boolean isSettingsKey(KeyEvent event) {
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java b/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
+index af0bd7b..e5e423b 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
+@@ -91,6 +91,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     private AppAdapter adapter;
+     private RecyclerView grid;
+     private FrameLayout root;
++    private WallpaperPlayer wallpaperPlayer;
++    private String companionRevision = "";
++    private final BroadcastReceiver companionReceiver = new BroadcastReceiver() {
++        @Override public void onReceive(Context context, Intent intent) {
++            if (!companionRevision.equals(CompanionProvider.revision(MainActivity.this))) recreate();
++        }
++    };
+     private GlassView glass;
+     private View ambient;
+     private TextView heroName;
+@@ -198,6 +205,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+             updateGreeting();
+             updateWifiLabel();
+             sky.update();
++            wallpaperPlayer.update();
+             handler.postDelayed(this, MINUTE_MS);
+         }
+     };
+@@ -209,6 +217,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         density = getResources().getDisplayMetrics().density;
+         // config.xml, overlaid by config.json from a pushed theme (see Config and tools/theme.sh).
+         Config cfg = Config.load(this);
++        companionRevision = CompanionProvider.revision(this);
+         COLUMNS = cfg.columns;
+         animations = cfg.animations;
+         advancedEffects = cfg.animations && cfg.advancedEffects;
+@@ -223,7 +232,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+ 
+         root = findViewById(R.id.root);
+         root.setBackgroundColor(cfg.backgroundColor);
+-        if (cfg.wallpaper != null) showWallpaper(cfg.wallpaper);
++        wallpaperPlayer = new WallpaperPlayer(this, root, cfg);
+         sky = findViewById(R.id.sky);
+         sky.setIntensity(cfg.skyIntensity);
+         glass = findViewById(R.id.glass);
+@@ -387,32 +396,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         }
+     }
+ 
+-    /**
+-     * A theme's full-screen picture behind everything. Decoded once, downsampled to the screen so a 4K
+-     * JPEG costs a 1080p bitmap at most (about 8 MB), which is the price of a wallpaper on a 1 GB TV.
+-     */
+-    private void showWallpaper(File file) {
+-        try {
+-            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+-            android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+-            opts.inJustDecodeBounds = true;
+-            android.graphics.BitmapFactory.decodeFile(file.getPath(), opts);
+-            int sample = 1;
+-            while (opts.outWidth / (sample * 2) >= dm.widthPixels && opts.outHeight / (sample * 2) >= dm.heightPixels) sample *= 2;
+-            opts.inJustDecodeBounds = false;
+-            opts.inSampleSize = sample;
+-            opts.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;   // no alpha needed, half the memory
+-            android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeFile(file.getPath(), opts);
+-            if (bmp == null) return;
+-            android.widget.ImageView wall = new android.widget.ImageView(this);
+-            wall.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+-            wall.setImageBitmap(bmp);
+-            root.addView(wall, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+-        } catch (Exception | OutOfMemoryError e) {
+-            // A bad or huge picture must never take the home screen down; the plain colour stays.
+-        }
+-    }
+-
+     /**
+      * Home pressed while Home is already in front: singleTask delivers it here, then onResume runs.
+      * Back to the top with the first dock tile focused, like the stock launcher. Back from an app
+@@ -433,14 +416,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         super.onStart();
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+             registerReceiver(packageReceiver, packageFilter, Context.RECEIVER_NOT_EXPORTED);
++            registerReceiver(companionReceiver, new IntentFilter(CompanionProvider.ACTION_UPDATED), Context.RECEIVER_NOT_EXPORTED);
+         } else {
+             registerReceiver(packageReceiver, packageFilter);
++            registerReceiver(companionReceiver, new IntentFilter(CompanionProvider.ACTION_UPDATED));
+         }
+     }
+ 
+     @Override
+     protected void onResume() {
+         super.onResume();
++        if (!companionRevision.equals(CompanionProvider.revision(this))) { recreate(); return; }
+         // A festival that started or ended while Home was in the background: rebuild with or without it.
+         if (festive != festival.active(LocalDate.now())) {
+             recreate();
+@@ -456,6 +442,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         updateWifiLabel();
+         updateInputsButton();
+         sky.update();
++        wallpaperPlayer.start();
+         handler.postDelayed(minuteTick, MINUTE_MS);
+         if (festive && diya != null) {
+             diya.start();
+@@ -538,6 +525,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     @Override
+     protected void onPause() {
+         super.onPause();
++        wallpaperPlayer.stop();
+         stopAmbientAnimation();
+         heroName.animate().cancel();
+         ambient.animate().cancel();
+@@ -552,6 +540,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     protected void onStop() {
+         super.onStop();
+         unregisterReceiver(packageReceiver);
++        unregisterReceiver(companionReceiver);
+         rebuildOnResume = true;
+     }
+ 
+@@ -564,6 +553,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     @Override
+     protected void onDestroy() {
+         super.onDestroy();
++        wallpaperPlayer.close();
+         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
+         if (tim != null) tim.unregisterCallback(inputCallback);
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/UnsplashWallpaper.java b/launcher/app/src/main/java/com/gathin/tvhome/UnsplashWallpaper.java
+new file mode 100644
+index 0000000..2566695
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/UnsplashWallpaper.java
+@@ -0,0 +1,195 @@
++package com.gathin.tvhome;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
++import android.net.Uri;
++import android.util.AtomicFile;
++import android.util.Log;
++
++import org.json.JSONObject;
++
++import java.io.ByteArrayOutputStream;
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.InputStream;
++import java.nio.charset.StandardCharsets;
++
++import javax.net.ssl.HttpsURLConnection;
++
++/** Optional personal integration. Credentials are imported once, never logged or bundled. */
++final class UnsplashWallpaper {
++    private final long interval;
++    private final boolean allowed;
++    private final SharedPreferences state;
++    private final File directory;
++    private final String key;
++    private final String collections;
++
++    static final class Photo {
++        final Bitmap bitmap;
++        final String id;
++        final String photographer;
++        final String link;
++
++        Photo(Bitmap bitmap, JSONObject data) throws Exception {
++            this.bitmap = bitmap;
++            id = data.getString("id");
++            photographer = data.getString("photographer");
++            link = data.getString("link");
++        }
++    }
++
++    UnsplashWallpaper(Context context, Config config) {
++        interval = Math.max(30, config.wallpaperRotationMinutes) * 60_000L;
++        allowed = config.wallpaperEnabled;
++        state = context.getSharedPreferences("unsplash", Context.MODE_PRIVATE);
++        directory = new File(context.getFilesDir(), "unsplash");
++        directory.mkdirs();
++        // ADB cannot write release-app private storage. Import a staging file and remove it.
++        File external = context.getExternalFilesDir(null);
++        File staging = external == null ? null : new File(external, "unsplash-setup.json");
++        if (staging != null && staging.isFile()) {
++            try (InputStream input = new java.io.FileInputStream(staging)) {
++                JSONObject setup = new JSONObject(new String(read(input, 8192), StandardCharsets.UTF_8));
++                String access = setup.getString("access_key");
++                String ids = setup.getString("collections");
++                if (!access.matches("[A-Za-z0-9_-]{10,200}")
++                        || !ids.matches("[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*")) {
++                    throw new IllegalArgumentException();
++                }
++                if (state.edit().putString("access_key", access).putString("collections", ids)
++                        .putLong("changed", 0).putLong("retry", 0).commit()) {
++                    if (!staging.delete()) Log.w("TvHome.Unsplash", "Remove leftover setup file");
++                }
++            } catch (Exception failure) {
++                Log.w("TvHome.Unsplash", "Could not import wallpaper setup");
++            }
++        }
++        key = state.getString("access_key", "");
++        collections = state.getString("collections", "");
++    }
++
++    boolean enabled() { return allowed && !key.isEmpty() && !collections.isEmpty(); }
++
++    boolean due() {
++        long now = System.currentTimeMillis();
++        long retry = state.getLong("retry", 0);
++        return (retry <= now || retry - now > interval * 2)
++                && WallpaperRotation.due(state.getLong("changed", 0), now, interval);
++    }
++
++    // Called only by WallpaperPlayer's worker thread. Keep the previous photo on any failure.
++    Photo load(int width, int height) {
++        if (due()) {
++            state.edit().putLong("retry", System.currentTimeMillis() + 5 * 60_000L).commit();
++            try {
++                JSONObject response = json("https://api.unsplash.com/photos/random?orientation=landscape"
++                        + "&content_filter=high&collections=" + Uri.encode(collections));
++                String id = response.getString("id");
++                if (!id.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException();
++                Uri raw = Uri.parse(response.getJSONObject("urls").getString("raw"));
++                Uri.Builder resized = raw.buildUpon().clearQuery();
++                for (String name : raw.getQueryParameterNames()) {
++                    if (name.equals("w") || name.equals("h") || name.equals("fit")
++                            || name.equals("fm") || name.equals("q")) continue;
++                    for (String value : raw.getQueryParameters(name)) resized.appendQueryParameter(name, value);
++                }
++                String url = resized.appendQueryParameter("w", String.valueOf(Math.min(1920, width)))
++                        .appendQueryParameter("h", String.valueOf(Math.min(1080, height)))
++                        .appendQueryParameter("fit", "crop").appendQueryParameter("fm", "jpg")
++                        .appendQueryParameter("q", "80").build().toString();
++                byte[] bytes = request(url, "images.unsplash.com", 6 * 1024 * 1024, false);
++                BitmapFactory.Options bounds = new BitmapFactory.Options();
++                bounds.inJustDecodeBounds = true;
++                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
++                if (bounds.outWidth <= 0 || bounds.outHeight <= 0
++                        || bounds.outWidth > 3840 || bounds.outHeight > 2160) throw new IllegalArgumentException();
++                // Wallpaper selection is a download event, using the API-provided tracking URL.
++                json(response.getJSONObject("links").getString("download_location"));
++                JSONObject user = response.getJSONObject("user");
++                String username = user.getString("username");
++                if (!username.matches("[A-Za-z0-9_-]+")) throw new IllegalArgumentException();
++                JSONObject metadata = new JSONObject().put("id", id)
++                        .put("photographer", user.getString("name"))
++                        .put("link", "https://unsplash.com/@" + username
++                                + "?utm_source=cleanyourtv&utm_medium=referral");
++                write(new File(directory, id + ".jpg"), bytes);
++                write(new File(directory, "current.json"), metadata.toString().getBytes(StandardCharsets.UTF_8));
++                state.edit().putLong("changed", System.currentTimeMillis()).putLong("retry", 0).commit();
++                File[] old = directory.listFiles();
++                if (old != null) for (File file : old) {
++                    if (file.getName().endsWith(".jpg") && !file.getName().equals(id + ".jpg")) file.delete();
++                }
++            } catch (Exception failure) {
++                // Never log exception messages: request URLs or credentials may be embedded.
++                Log.w("TvHome.Unsplash", "Refresh unavailable; keeping previous wallpaper");
++            }
++        }
++        try (InputStream input = new AtomicFile(new File(directory, "current.json")).openRead()) {
++            JSONObject metadata = new JSONObject(new String(read(input, 8192), StandardCharsets.UTF_8));
++            String id = metadata.getString("id");
++            if (!id.matches("[A-Za-z0-9_-]{1,100}")) return null;
++            BitmapFactory.Options options = new BitmapFactory.Options();
++            options.inPreferredConfig = Bitmap.Config.RGB_565;
++            Bitmap bitmap = BitmapFactory.decodeFile(new File(directory, id + ".jpg").getPath(), options);
++            return bitmap == null ? null : new Photo(bitmap, metadata);
++        } catch (Exception | OutOfMemoryError failure) {
++            return null;
++        }
++    }
++
++    private JSONObject json(String url) throws Exception {
++        return new JSONObject(new String(request(url, "api.unsplash.com", 256 * 1024, true), StandardCharsets.UTF_8));
++    }
++
++    private byte[] request(String url, String host, int limit, boolean authenticate) throws Exception {
++        java.net.URL target = new java.net.URL(url);
++        if (!"https".equals(target.getProtocol()) || !host.equals(target.getHost())
++                || target.getUserInfo() != null || (target.getPort() != -1 && target.getPort() != 443)) {
++            throw new IllegalArgumentException();
++        }
++        HttpsURLConnection connection = (HttpsURLConnection) target.openConnection();
++        connection.setConnectTimeout(10000);
++        connection.setReadTimeout(15000);
++        connection.setInstanceFollowRedirects(false);
++        if (authenticate) {
++            connection.setRequestProperty("Authorization", "Client-ID " + key);
++            connection.setRequestProperty("Accept-Version", "v1");
++        }
++        try {
++            int status = connection.getResponseCode();
++            if (status == 401 || status == 403 || status == 429) {
++                state.edit().putLong("retry", System.currentTimeMillis() + 60 * 60_000L).commit();
++            }
++            if (status != 200) throw new java.io.IOException();
++            try (InputStream input = connection.getInputStream()) { return read(input, limit); }
++        } finally {
++            connection.disconnect();
++        }
++    }
++
++    private static byte[] read(InputStream input, int limit) throws Exception {
++        ByteArrayOutputStream output = new ByteArrayOutputStream();
++        byte[] buffer = new byte[8192];
++        int size;
++        while ((size = input.read(buffer)) != -1) {
++            if (output.size() + size > limit) throw new java.io.IOException();
++            output.write(buffer, 0, size);
++        }
++        return output.toByteArray();
++    }
++
++    private static void write(File file, byte[] bytes) throws Exception {
++        AtomicFile atomic = new AtomicFile(file);
++        FileOutputStream output = atomic.startWrite();
++        try {
++            output.write(bytes);
++            atomic.finishWrite(output);
++        } catch (Exception failure) {
++            atomic.failWrite(output);
++            throw failure;
++        }
++    }
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
+new file mode 100644
+index 0000000..ce72b80
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
+@@ -0,0 +1,186 @@
++package com.gathin.tvhome;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
++import android.util.DisplayMetrics;
++import android.util.Log;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.FrameLayout;
++import android.widget.ImageView;
++
++import java.io.File;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Random;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++final class WallpaperPlayer {
++    private final UnsplashWallpaper unsplash;
++    private final android.widget.TextView credit;
++    private final FrameLayout root;
++    private final ImageView image;
++    private final List<File> files;
++    private final long interval;
++    private final SharedPreferences preferences;
++    private final ExecutorService decoder = Executors.newSingleThreadExecutor();
++    private final Random random = new Random();
++    private final int width;
++    private final int height;
++    private boolean active;
++    private boolean closed;
++    private boolean loading;
++    private String displayed = "";
++
++    WallpaperPlayer(Context context, FrameLayout root, Config config) {
++        this.root = root;
++        unsplash = new UnsplashWallpaper(context, config);
++        credit = new android.widget.TextView(context);
++        credit.setTextColor(android.graphics.Color.WHITE);
++        credit.setTextSize(12);
++        credit.setPadding(12, 6, 12, 6);
++        credit.setBackgroundColor(0x99000000);
++        credit.setVisibility(View.GONE);
++        credit.setFocusable(true);
++        credit.setOnFocusChangeListener((view, focused) ->
++                view.setBackgroundColor(focused ? 0xFF444444 : 0x99000000));
++        FrameLayout.LayoutParams creditLayout = new FrameLayout.LayoutParams(
++                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
++                android.view.Gravity.BOTTOM | android.view.Gravity.RIGHT);
++        creditLayout.setMargins(0, 0, 24, 12);
++        root.addView(credit, creditLayout);
++        files = new ArrayList<>(config.wallpapers);
++        interval = config.wallpaperRotationMinutes * 60_000L;
++        preferences = context.getSharedPreferences("wallpaper_rotation", Context.MODE_PRIVATE);
++        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
++        width = metrics.widthPixels;
++        height = metrics.heightPixels;
++        image = new ImageView(context);
++        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
++        image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++        if (!files.isEmpty() || unsplash.enabled()) {
++            root.addView(image, 0, new FrameLayout.LayoutParams(
++                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++            View shade = new View(context);
++            shade.setBackgroundColor((config.wallpaperDim * 255 / 100) << 24);
++            shade.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++            root.addView(shade, 1, new FrameLayout.LayoutParams(
++                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        }
++    }
++
++    void start() {
++        active = true;
++        update();
++    }
++
++    void stop() {
++        active = false;
++    }
++
++    void close() {
++        active = false;
++        closed = true;
++        decoder.shutdownNow();
++    }
++
++    void update() {
++        if (!active || closed || loading) return;
++        if (unsplash.enabled() && (unsplash.due() || displayed.isEmpty())) {
++            loading = true;
++            decoder.execute(() -> {
++                UnsplashWallpaper.Photo photo = unsplash.load(width, height);
++                root.post(() -> {
++                    loading = false;
++                    if (closed || !active) {
++                        if (photo != null) photo.bitmap.recycle();
++                        return;
++                    }
++                    if (photo != null) {
++                        image.setImageBitmap(photo.bitmap);
++                        displayed = "unsplash:" + photo.id;
++                        credit.setText("Photo: " + photo.photographer + " / Unsplash");
++                        credit.setContentDescription("Photo by " + photo.photographer
++                                + " on Unsplash. Open photo credits.");
++                        credit.setVisibility(View.VISIBLE);
++                        credit.setOnClickListener(view -> {
++                            try {
++                                root.getContext().startActivity(new android.content.Intent(
++                                        android.content.Intent.ACTION_VIEW,
++                                        android.net.Uri.parse(photo.link)));
++                            } catch (android.content.ActivityNotFoundException unavailable) {
++                                android.widget.Toast.makeText(root.getContext(),
++                                        "Photo by " + photo.photographer + " on Unsplash",
++                                        android.widget.Toast.LENGTH_LONG).show();
++                            }
++                        });
++                        Log.i("TvHome.Wallpaper", "Showing Unsplash photo " + photo.id);
++                    } else {
++                        updateOffline();
++                    }
++                });
++            });
++            return;
++        }
++        if (unsplash.enabled() && displayed.startsWith("unsplash:")) return;
++        updateOffline();
++    }
++
++    private void updateOffline() {
++        if (files.isEmpty()) return;
++        String previous = preferences.getString("image", "");
++        File selected = WallpaperRotation.find(files, previous);
++        long changed = preferences.getLong("changed", 0);
++        if (selected == null || WallpaperRotation.due(changed, System.currentTimeMillis(), interval)) {
++            selected = WallpaperRotation.pick(files, previous, random);
++        }
++        if (selected == null || selected.getName().equals(displayed)) return;
++        File next = selected;
++        loading = true;
++        decoder.execute(() -> {
++            Bitmap bitmap = decode(next);
++            root.post(() -> {
++                loading = false;
++                if (closed || !active) {
++                    if (bitmap != null) bitmap.recycle();
++                    return;
++                }
++                if (bitmap == null) {
++                    files.remove(next);
++                    Log.w("TvHome.Wallpaper", "Skipping unreadable image: " + next.getName());
++                    update();
++                    return;
++                }
++                credit.setVisibility(View.GONE);
++                image.setImageBitmap(bitmap);
++                displayed = next.getName();
++                if (!displayed.equals(previous) || changed == 0) {
++                    preferences.edit().putString("image", displayed)
++                            .putLong("changed", System.currentTimeMillis()).apply();
++                }
++                Log.i("TvHome.Wallpaper", "Showing " + displayed);
++            });
++        });
++    }
++
++    private Bitmap decode(File file) {
++        try {
++            BitmapFactory.Options options = new BitmapFactory.Options();
++            options.inJustDecodeBounds = true;
++            BitmapFactory.decodeFile(file.getPath(), options);
++            if (options.outWidth <= 0 || options.outHeight <= 0) return null;
++            int sample = 1;
++            while (options.outWidth / sample > Math.max(1, width) * 2
++                    || options.outHeight / sample > Math.max(1, height) * 2) sample *= 2;
++            options.inJustDecodeBounds = false;
++            options.inSampleSize = sample;
++            options.inPreferredConfig = Bitmap.Config.RGB_565;
++            return BitmapFactory.decodeFile(file.getPath(), options);
++        } catch (Exception | OutOfMemoryError failure) {
++            return null;
++        }
++    }
++}
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperRotation.java b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperRotation.java
+new file mode 100644
+index 0000000..f1e7e55
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperRotation.java
+@@ -0,0 +1,43 @@
++package com.gathin.tvhome;
++
++import java.io.File;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Comparator;
++import java.util.List;
++import java.util.Locale;
++import java.util.Random;
++
++final class WallpaperRotation {
++    static List<File> images(File directory) {
++        List<File> result = new ArrayList<>();
++        File[] entries = directory == null ? null : directory.listFiles();
++        if (entries == null) return result;
++        Arrays.sort(entries, Comparator.comparing(File::getName));
++        for (File entry : entries) {
++            String name = entry.getName().toLowerCase(Locale.ROOT);
++            if (entry.isFile() && entry.length() > 0 && entry.length() <= 10 * 1024 * 1024
++                    && (name.endsWith(".jpg") || name.endsWith(".jpeg")
++                    || name.endsWith(".png") || name.endsWith(".webp"))) {
++                result.add(entry);
++                if (result.size() == 100) break;
++            }
++        }
++        return result;
++    }
++
++    static File find(List<File> images, String name) {
++        for (File image : images) if (image.getName().equals(name)) return image;
++        return null;
++    }
++
++    static File pick(List<File> images, String previous, Random random) {
++        List<File> candidates = new ArrayList<>(images);
++        if (candidates.size() > 1) candidates.removeIf(image -> image.getName().equals(previous));
++        return candidates.isEmpty() ? null : candidates.get(random.nextInt(candidates.size()));
++    }
++
++    static boolean due(long previous, long now, long interval) {
++        return interval > 0 && (previous == 0 || now < previous || now - previous >= interval);
++    }
++}
+diff --git a/launcher/app/src/test/java/com/gathin/tvhome/CompanionStoreTest.java b/launcher/app/src/test/java/com/gathin/tvhome/CompanionStoreTest.java
+new file mode 100644
+index 0000000..986e534
+--- /dev/null
++++ b/launcher/app/src/test/java/com/gathin/tvhome/CompanionStoreTest.java
+@@ -0,0 +1,88 @@
++package com.gathin.tvhome;
++
++import org.json.*;
++import org.junit.*;
++import org.junit.rules.TemporaryFolder;
++import java.io.*;
++import java.nio.channels.FileChannel;
++import java.nio.file.StandardOpenOption;
++import java.util.concurrent.atomic.AtomicBoolean;
++import static org.junit.Assert.*;
++
++public class CompanionStoreTest {
++    @Rule public TemporaryFolder temporary=new TemporaryFolder();
++    private static final String SESSION="0123456789abcdef0123456789abcdef",OP="fedcba9876543210fedcba9876543210";
++    private JSONObject source;
++    private File root;
++    private CompanionStore store;
++    private AtomicBoolean failRootSync;
++    @Before public void setup() throws Exception {
++        root=temporary.newFolder();source=new JSONObject("{\"settings\":{\"wallpaper\":true,\"future_key\":{\"nested\":1},\"provider_token\":\"fixture\"},\"preferences\":{\"columns\":5}}");
++        failRootSync=new AtomicBoolean(false);store=make();
++    }
++    private CompanionStore make() throws Exception {
++        return new CompanionStore(root,()->source,dir->{
++            if(dir.equals(root) && failRootSync.getAndSet(false))throw new IOException("simulated crash after atomic replacement");
++            try(FileChannel channel=FileChannel.open(dir.toPath(),StandardOpenOption.READ)){channel.force(true);}
++        },(file,mime)->{});
++    }
++    private JSONObject request(String patch,JSONArray collections) throws Exception {
++        return new JSONObject().put("protocol_version",1).put("request_id",SESSION).put("expected_revision",store.state().getString("revision"))
++            .put("patch",new JSONObject(patch)).put("collections",collections);
++    }
++    private JSONObject activation(String revision) throws Exception {
++        return new JSONObject().put("request_id",OP).put("session_id",SESSION).put("expected_revision",revision);
++    }
++    private void failure(String code,Throwing work) throws Exception {
++        try{work.run();fail("Expected "+code);}catch(CompanionStore.Failure failure){assertEquals(code,failure.code);}
++    }
++    interface Throwing{void run() throws Exception;}
++    @Test public void activation_is_idempotent_and_readback_excludes_private_unknown_settings() throws Exception {
++        JSONObject before=store.state();JSONObject stage=request("{\"set\":{\"wallpaper\":false}}",new JSONArray());store.stage(stage);
++        assertTrue(store.state().getJSONObject("settings").getBoolean("wallpaper"));
++        assertTrue(store.validate(SESSION).getBoolean("ready"));
++        JSONObject result=store.activate(activation(before.getString("revision")));
++        assertFalse(store.state().getJSONObject("settings").getBoolean("wallpaper"));
++        assertEquals(result.getString("revision"),store.state().getString("revision"));
++        assertEquals(result.toString(),store.activate(activation(before.getString("revision"))).toString());
++        assertFalse(store.state().toString().contains("provider_token"));assertFalse(store.state().toString().contains("fixture"));
++        assertEquals(1,source.getJSONObject("settings").getJSONObject("future_key").getInt("nested"));
++        failure("request_conflict",()->store.discard(SESSION));
++        assertEquals("activated",make().result(OP).getString("status"));
++    }
++    @Test public void later_manual_theme_or_tv_preference_changes_block_activation() throws Exception {
++        JSONObject stage=request("{\"set\":{\"wallpaper\":false}}",new JSONArray());store.stage(stage);
++        source.getJSONObject("preferences").put("columns",6);
++        failure("revision_conflict",()->store.activate(activation(stage.getString("expected_revision"))));
++        assertTrue(store.state().getJSONObject("settings").getBoolean("wallpaper"));
++    }
++    @Test public void unknown_keys_conflicting_patch_and_traversal_are_rejected() throws Exception {
++        failure("unsupported_feature",()->store.stage(request("{\"set\":{\"provider_token\":\"bad\"}}",new JSONArray())));
++        failure("invalid_request",()->store.stage(request("{\"set\":{\"wallpaper\":false},\"remove\":[\"wallpaper\"]}",new JSONArray())));
++        failure("invalid_request",()->store.discard("../../outside"));
++    }
++    @Test public void discard_is_idempotent_and_session_identifiers_cannot_be_reused() throws Exception {
++        JSONObject stage=request("{}",new JSONArray());store.stage(stage);store.discard(SESSION);store.discard(SESSION);
++        failure("request_conflict",()->store.stage(stage));failure("unknown_session",()->store.validate(SESSION));
++    }
++    @Test public void lost_ack_after_atomic_replacement_reconciles_after_restart() throws Exception {
++        JSONObject stage=request("{\"set\":{\"wallpaper_dim\":25}}",new JSONArray());store.stage(stage);failRootSync.set(true);
++        try{store.activate(activation(stage.getString("expected_revision")));fail();}catch(IOException expected){}
++        CompanionStore reopened=make();assertEquals(25,reopened.state().getJSONObject("settings").getInt("wallpaper_dim"));
++        assertEquals("activated",reopened.result(OP).getString("status"));
++        reopened.activate(activation(stage.getString("expected_revision")));
++        assertEquals(1,reopened.active().getJSONObject("operations").length());
++    }
++    @Test public void truncated_oversized_and_hash_mismatched_uploads_do_not_activate() throws Exception {
++        byte[] bytes={1,2,3,4};String sha=CompanionStore.hash(bytes);
++        JSONArray collections=new JSONArray().put(new JSONObject().put("id",OP).put("order","shuffle").put("interval_minutes",15)
++            .put("assets",new JSONArray().put(new JSONObject().put("sha256",sha).put("bytes",4).put("mime","image/png"))));
++        store.stage(request("{}",collections));
++        failure("invalid_asset",()->store.receive(SESSION,sha,new ByteArrayInputStream(new byte[]{1,2})));
++        failure("invalid_asset",()->store.receive(SESSION,sha,new ByteArrayInputStream(new byte[]{1,2,3,4,5})));
++        failure("invalid_asset",()->store.receive(SESSION,sha,new ByteArrayInputStream(new byte[]{4,3,2,1})));
++        assertFalse(store.validate(SESSION).getBoolean("ready"));
++        store.receive(SESSION,sha,new ByteArrayInputStream(bytes));assertTrue(store.validate(SESSION).getBoolean("ready"));
++        assertEquals(1,store.assets.list().length);
++    }
++}
+diff --git a/launcher/app/src/test/java/com/gathin/tvhome/WallpaperRotationTest.java b/launcher/app/src/test/java/com/gathin/tvhome/WallpaperRotationTest.java
+new file mode 100644
+index 0000000..340afcf
+--- /dev/null
++++ b/launcher/app/src/test/java/com/gathin/tvhome/WallpaperRotationTest.java
+@@ -0,0 +1,68 @@
++package com.gathin.tvhome;
++
++import org.junit.Rule;
++import org.junit.Test;
++import org.junit.rules.TemporaryFolder;
++
++import java.io.File;
++import java.nio.file.Files;
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.List;
++import java.util.Random;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotEquals;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++public class WallpaperRotationTest {
++    @Rule public TemporaryFolder temporary = new TemporaryFolder();
++
++    @Test public void onlyNonemptySupportedImagesAreIncluded() throws Exception {
++        File directory = temporary.newFolder();
++        Files.write(new File(directory, "mountain.JPG").toPath(), new byte[]{1});
++        Files.write(new File(directory, "valley.webp").toPath(), new byte[]{1});
++        Files.write(new File(directory, "credits.md").toPath(), new byte[]{1});
++        Files.createFile(new File(directory, "empty.png").toPath());
++        new File(directory, "folder.jpg").mkdir();
++        List<File> images = WallpaperRotation.images(directory);
++        assertEquals(2, images.size());
++        assertEquals("mountain.JPG", images.get(0).getName());
++        assertEquals("valley.webp", images.get(1).getName());
++    }
++
++    @Test public void missingDirectoryAndNullProduceAnEmptyCollection() {
++        assertTrue(WallpaperRotation.images(null).isEmpty());
++        assertTrue(WallpaperRotation.images(new File(temporary.getRoot(), "missing")).isEmpty());
++    }
++
++    @Test public void selectionDoesNotImmediatelyRepeatWhenAlternativesExist() {
++        List<File> images = Arrays.asList(new File("first.jpg"), new File("second.jpg"), new File("third.jpg"));
++        Random random = new Random(42);
++        for (int attempt = 0; attempt < 100; attempt++) {
++            assertNotEquals("second.jpg", WallpaperRotation.pick(images, "second.jpg", random).getName());
++        }
++    }
++
++    @Test public void emptyAndSingleImageCollectionsAreSafe() {
++        assertNull(WallpaperRotation.pick(Collections.emptyList(), "", new Random(42)));
++        File image = new File("only.jpg");
++        assertEquals(image, WallpaperRotation.pick(Collections.singletonList(image), image.getName(), new Random(42)));
++    }
++
++    @Test public void persistedImageCanBeFoundAndMissingImageIsIgnored() {
++        List<File> images = Arrays.asList(new File("first.jpg"), new File("second.jpg"));
++        assertEquals(images.get(1), WallpaperRotation.find(images, "second.jpg"));
++        assertNull(WallpaperRotation.find(images, "removed.jpg"));
++    }
++
++    @Test public void rotatesOnlyWhenDueAndHandlesClockMovingBackward() {
++        assertFalse(WallpaperRotation.due(1_000, 2_000, 60_000));
++        assertTrue(WallpaperRotation.due(1_000, 61_000, 60_000));
++        assertTrue(WallpaperRotation.due(2_000, 1_000, 60_000));
++        assertTrue(WallpaperRotation.due(0, 1_000, 60_000));
++        assertFalse(WallpaperRotation.due(0, 1_000, 0));
++    }
++}
+-- 
+2.55.0
+
+
+From 31dba4c038e8abcdc9ab24b2738e27abf743b4d0 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Tue, 20 Oct 2026 19:25:04 +0530
+Subject: [PATCH 2/4] fix(protocol): reject operation ID reuse and validate
+ image decoding
+
+---
+ launcher/app/build.gradle                                  | 4 ++--
+ .../src/main/java/com/gathin/tvhome/CompanionProvider.java | 4 ++++
+ .../src/main/java/com/gathin/tvhome/CompanionStore.java    | 1 +
+ .../test/java/com/gathin/tvhome/CompanionStoreTest.java    | 7 +++++++
+ 4 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/launcher/app/build.gradle b/launcher/app/build.gradle
+index 2739be3..49fae74 100644
+--- a/launcher/app/build.gradle
++++ b/launcher/app/build.gradle
+@@ -10,8 +10,8 @@ android {
+         applicationId 'com.gathin.tvhome'
+         minSdk 26
+         targetSdk 34
+-        versionCode 7
+-        versionName '2.5-companion.1'
++        versionCode 8
++        versionName '2.5-companion.2'
+     }
+ 
+     buildFeatures { buildConfig true }
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java b/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
+index dfa1337..3a19145 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
+@@ -36,6 +36,10 @@ public final class CompanionProvider extends ContentProvider {
+             BitmapFactory.decodeFile(file.getPath(),options);
+             CompanionStore.require(options.outWidth>0 && options.outHeight>0 && options.outWidth<=16384 && options.outHeight<=16384
+                 && (long)options.outWidth*options.outHeight<=33177600 && mime.equals(options.outMimeType),"invalid_asset");
++            BitmapFactory.Options decode=new BitmapFactory.Options();decode.inSampleSize=1;
++            while(options.outWidth/decode.inSampleSize>512 || options.outHeight/decode.inSampleSize>512)decode.inSampleSize*=2;
++            android.graphics.Bitmap bitmap=BitmapFactory.decodeFile(file.getPath(),decode);
++            CompanionStore.require(bitmap!=null,"invalid_asset");bitmap.recycle();
+         });
+         return instance;
+     }
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java b/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
+index 5162e55..d08c454 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
+@@ -188,6 +188,7 @@ final class CompanionStore {
+     synchronized JSONObject activate(JSONObject request) throws Exception {
+         String id=request.getString("session_id"), op=request.getString("request_id");require(hex(op,32),"invalid_request");
+         JSONObject active=active(), operations=active.getJSONObject("operations");
++        if(operations.has(op))require(id.equals(operations.getJSONObject(op).getString("session_id")),"request_conflict");
+         for(Iterator<String> it=operations.keys();it.hasNext();) {String previous=it.next();JSONObject result=operations.getJSONObject(previous);if(id.equals(result.getString("session_id")))return new JSONObject().put("revision",result.getString("revision")).put("operation_id",previous);}
+         require(request.getString("expected_revision").equals(state().getString("revision")),"revision_conflict");
+         JSONObject checked=validate(id);require(checked.getBoolean("ready"),"missing_assets");JSONObject session=session(id), patch=session.getJSONObject("patch");
+diff --git a/launcher/app/src/test/java/com/gathin/tvhome/CompanionStoreTest.java b/launcher/app/src/test/java/com/gathin/tvhome/CompanionStoreTest.java
+index 986e534..b12a59a 100644
+--- a/launcher/app/src/test/java/com/gathin/tvhome/CompanionStoreTest.java
++++ b/launcher/app/src/test/java/com/gathin/tvhome/CompanionStoreTest.java
+@@ -50,6 +50,13 @@ public class CompanionStoreTest {
+         failure("request_conflict",()->store.discard(SESSION));
+         assertEquals("activated",make().result(OP).getString("status"));
+     }
++    @Test public void operation_identifier_cannot_activate_a_different_session() throws Exception {
++        JSONObject first=request("{}",new JSONArray());store.stage(first);store.activate(activation(first.getString("expected_revision")));
++        String second="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
++        JSONObject next=request("{}",new JSONArray()).put("request_id",second);store.stage(next);
++        JSONObject reused=activation(next.getString("expected_revision")).put("session_id",second);
++        failure("request_conflict",()->store.activate(reused));
++    }
+     @Test public void later_manual_theme_or_tv_preference_changes_block_activation() throws Exception {
+         JSONObject stage=request("{\"set\":{\"wallpaper\":false}}",new JSONArray());store.stage(stage);
+         source.getJSONObject("preferences").put("columns",6);
+-- 
+2.55.0
+
+
+From 677e2b35c968112751e9c8dd37550c402a7c08da Mon Sep 17 00:00:00 2001
+From: Hari Haran <hharan618@gmail.com>
+Date: Tue, 20 Oct 2026 19:56:09 +0530
+Subject: [PATCH 3/4] feat(wallpapers): persist collection order and playback
+ interval
+
+---
+ .../com/gathin/tvhome/WallpaperPlayer.java    | 73 ++++++++++++++++---
+ .../com/gathin/tvhome/WallpaperRotation.java  | 53 ++++++++++++++
+ .../gathin/tvhome/WallpaperRotationTest.java  | 69 ++++++++++++++++++
+ 3 files changed, 186 insertions(+), 9 deletions(-)
+
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
+index ce72b80..43b5c9e 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
+@@ -17,6 +17,8 @@ import java.util.List;
+ import java.util.Random;
+ import java.util.concurrent.ExecutorService;
+ import java.util.concurrent.Executors;
++import org.json.JSONArray;
++import org.json.JSONObject;
+ 
+ final class WallpaperPlayer {
+     private final UnsplashWallpaper unsplash;
+@@ -25,6 +27,8 @@ final class WallpaperPlayer {
+     private final ImageView image;
+     private final List<File> files;
+     private final long interval;
++    private final String order;
++    private final boolean companionCollectionActive;
+     private final SharedPreferences preferences;
+     private final ExecutorService decoder = Executors.newSingleThreadExecutor();
+     private final Random random = new Random();
+@@ -53,7 +57,10 @@ final class WallpaperPlayer {
+         creditLayout.setMargins(0, 0, 24, 12);
+         root.addView(credit, creditLayout);
+         files = new ArrayList<>(config.wallpapers);
+-        interval = config.wallpaperRotationMinutes * 60_000L;
++        PlaybackSettings playback = playbackSettings(context, config, files);
++        interval = playback.intervalMinutes * 60_000L;
++        order = playback.order;
++        companionCollectionActive = playback.companionCollectionActive;
+         preferences = context.getSharedPreferences("wallpaper_rotation", Context.MODE_PRIVATE);
+         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+         width = metrics.widthPixels;
+@@ -89,7 +96,8 @@ final class WallpaperPlayer {
+ 
+     void update() {
+         if (!active || closed || loading) return;
+-        if (unsplash.enabled() && (unsplash.due() || displayed.isEmpty())) {
++        // An active companion collection is the TV-owned source and stays offline-capable.
++        if (!companionCollectionActive && unsplash.enabled() && (unsplash.due() || displayed.isEmpty())) {
+             loading = true;
+             decoder.execute(() -> {
+                 UnsplashWallpaper.Photo photo = unsplash.load(width, height);
+@@ -125,18 +133,17 @@ final class WallpaperPlayer {
+             });
+             return;
+         }
+-        if (unsplash.enabled() && displayed.startsWith("unsplash:")) return;
++        if (!companionCollectionActive && unsplash.enabled() && displayed.startsWith("unsplash:")) return;
+         updateOffline();
+     }
+ 
+     private void updateOffline() {
+         if (files.isEmpty()) return;
+         String previous = preferences.getString("image", "");
+-        File selected = WallpaperRotation.find(files, previous);
+         long changed = preferences.getLong("changed", 0);
+-        if (selected == null || WallpaperRotation.due(changed, System.currentTimeMillis(), interval)) {
+-            selected = WallpaperRotation.pick(files, previous, random);
+-        }
++        WallpaperRotation.Playback selection = WallpaperRotation.select(files, previous, changed,
++                System.currentTimeMillis(), interval, order, random);
++        File selected = selection.image;
+         if (selected == null || selected.getName().equals(displayed)) return;
+         File next = selected;
+         loading = true;
+@@ -157,15 +164,63 @@ final class WallpaperPlayer {
+                 credit.setVisibility(View.GONE);
+                 image.setImageBitmap(bitmap);
+                 displayed = next.getName();
+-                if (!displayed.equals(previous) || changed == 0) {
++                if (!displayed.equals(previous) || changed == 0
++                        || selection.changedAt != changed) {
+                     preferences.edit().putString("image", displayed)
+-                            .putLong("changed", System.currentTimeMillis()).apply();
++                            .putLong("changed", selection.changedAt).apply();
+                 }
+                 Log.i("TvHome.Wallpaper", "Showing " + displayed);
+             });
+         });
+     }
+ 
++    private static final class PlaybackSettings {
++        final int intervalMinutes;
++        final String order;
++        final boolean companionCollectionActive;
++
++        PlaybackSettings(int intervalMinutes, String order, boolean companionCollectionActive) {
++            this.intervalMinutes = intervalMinutes;
++            this.order = order;
++            this.companionCollectionActive = companionCollectionActive;
++        }
++    }
++
++    /** Reads playback policy from the active collection, falling back to legacy theme settings. */
++    private static PlaybackSettings playbackSettings(Context context, Config config,
++                                                     List<File> activeWallpapers) {
++        int interval = WallpaperRotation.intervalMinutes(config.wallpaperRotationMinutes,
++                WallpaperRotation.DEFAULT_INTERVAL_MINUTES);
++        String order = WallpaperRotation.SHUFFLE;
++        boolean selectedCollectionFound = false;
++        try {
++            JSONObject state = CompanionProvider.store(context).state();
++            JSONObject settings = state.optJSONObject("settings");
++            if (settings != null) {
++                interval = WallpaperRotation.intervalMinutes(settings.opt("wallpaper_rotation_minutes"), interval);
++                order = WallpaperRotation.order(settings.opt("wallpaper_order"), order);
++            }
++            String activeId = state.optString("active_collection", "");
++            JSONArray collections = state.optJSONArray("collections");
++            if (collections != null) {
++                for (int i = 0; i < collections.length(); i++) {
++                    JSONObject collection = collections.optJSONObject(i);
++                    if (collection == null || !activeId.equals(collection.optString("id"))) continue;
++                    JSONArray assets = collection.optJSONArray("assets");
++                    selectedCollectionFound = assets != null && assets.length() > 0;
++                    interval = WallpaperRotation.intervalMinutes(collection.opt("interval_minutes"), interval);
++                    order = WallpaperRotation.order(collection.opt("order"), order);
++                    break;
++                }
++            }
++        } catch (Exception ignored) {
++            // A malformed or unavailable companion state must not stop the legacy wallpaper.
++        }
++        boolean companionActive = WallpaperRotation.companionCollectionActive(selectedCollectionFound,
++                CompanionProvider.selectedAssets(context), activeWallpapers);
++        return new PlaybackSettings(interval, order, companionActive);
++    }
++
+     private Bitmap decode(File file) {
+         try {
+             BitmapFactory.Options options = new BitmapFactory.Options();
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperRotation.java b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperRotation.java
+index f1e7e55..dbe4517 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/WallpaperRotation.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/WallpaperRotation.java
+@@ -9,6 +9,58 @@ import java.util.Locale;
+ import java.util.Random;
+ 
+ final class WallpaperRotation {
++    static final String SEQUENTIAL = "sequential";
++    static final String SHUFFLE = "shuffle";
++    static final int DEFAULT_INTERVAL_MINUTES = 30;
++
++    static final class Playback {
++        final File image;
++        final long changedAt;
++
++        Playback(File image, long changedAt) {
++            this.image = image;
++            this.changedAt = changedAt;
++        }
++    }
++
++    static int intervalMinutes(Object value, int fallback) {
++        if (!(value instanceof Number)) return fallback;
++        double number = ((Number) value).doubleValue();
++        return number >= 1 && number <= 1440 && number == Math.floor(number)
++                ? (int) number : fallback;
++    }
++
++    static String order(Object value, String fallback) {
++        return SEQUENTIAL.equals(value) || SHUFFLE.equals(value) ? (String) value : fallback;
++    }
++
++    static boolean companionCollectionActive(boolean collectionSelected, List<File> companionAssets,
++                                             List<File> activeWallpapers) {
++        if (!collectionSelected || companionAssets == null || companionAssets.isEmpty()
++                || activeWallpapers == null || activeWallpapers.isEmpty()) return false;
++        for (File companionAsset : companionAssets) {
++            if (activeWallpapers.contains(companionAsset)) return true;
++        }
++        return false;
++    }
++
++    /** Selects the persisted image until its interval expires, then advances in collection order. */
++    static Playback select(List<File> images, String previous, long changedAt, long now,
++                           long interval, String order, Random random) {
++        File current = find(images, previous);
++        if (current != null && !due(changedAt, now, interval)) return new Playback(current, changedAt);
++        if (images == null || images.isEmpty()) return new Playback(null, changedAt);
++
++        File next;
++        if (SHUFFLE.equals(order)) {
++            next = pick(images, previous, random);
++        } else {
++            int currentIndex = current == null ? -1 : images.indexOf(current);
++            next = images.get((currentIndex + 1) % images.size());
++        }
++        return new Playback(next, now);
++    }
++
+     static List<File> images(File directory) {
+         List<File> result = new ArrayList<>();
+         File[] entries = directory == null ? null : directory.listFiles();
+@@ -27,6 +79,7 @@ final class WallpaperRotation {
+     }
+ 
+     static File find(List<File> images, String name) {
++        if (images == null) return null;
+         for (File image : images) if (image.getName().equals(name)) return image;
+         return null;
+     }
+diff --git a/launcher/app/src/test/java/com/gathin/tvhome/WallpaperRotationTest.java b/launcher/app/src/test/java/com/gathin/tvhome/WallpaperRotationTest.java
+index 340afcf..85475e3 100644
+--- a/launcher/app/src/test/java/com/gathin/tvhome/WallpaperRotationTest.java
++++ b/launcher/app/src/test/java/com/gathin/tvhome/WallpaperRotationTest.java
+@@ -65,4 +65,73 @@ public class WallpaperRotationTest {
+         assertTrue(WallpaperRotation.due(0, 1_000, 60_000));
+         assertFalse(WallpaperRotation.due(0, 1_000, 0));
+     }
++
++    @Test public void acceptsPresetAndCustomIntervalsAndFallsBackForInvalidValues() {
++        assertEquals(5, WallpaperRotation.intervalMinutes(5, 30));
++        assertEquals(15, WallpaperRotation.intervalMinutes(15, 30));
++        assertEquals(30, WallpaperRotation.intervalMinutes(30, 15));
++        assertEquals(1440, WallpaperRotation.intervalMinutes(1440, 30));
++        assertEquals(30, WallpaperRotation.intervalMinutes(0, 30));
++        assertEquals(30, WallpaperRotation.intervalMinutes(1441, 30));
++        assertEquals(30, WallpaperRotation.intervalMinutes(5.5, 30));
++        assertEquals(WallpaperRotation.SEQUENTIAL,
++                WallpaperRotation.order("sequential", WallpaperRotation.SHUFFLE));
++        assertEquals(WallpaperRotation.SHUFFLE,
++                WallpaperRotation.order("random", WallpaperRotation.SHUFFLE));
++    }
++
++    @Test public void sequentialPlaybackKeepsImageUntilDueThenAdvancesAndWraps() {
++        List<File> images = Arrays.asList(new File("first.jpg"), new File("second.jpg"), new File("third.jpg"));
++        WallpaperRotation.Playback current = WallpaperRotation.select(images, "second.jpg", 10_000,
++                10_001, 60_000, WallpaperRotation.SEQUENTIAL, new Random(42));
++        assertEquals(images.get(1), current.image);
++        assertEquals(10_000, current.changedAt);
++
++        WallpaperRotation.Playback next = WallpaperRotation.select(images, "second.jpg", 10_000,
++                70_000, 60_000, WallpaperRotation.SEQUENTIAL, new Random(42));
++        assertEquals(images.get(2), next.image);
++        assertEquals(70_000, next.changedAt);
++
++        WallpaperRotation.Playback wrapped = WallpaperRotation.select(images, "third.jpg", 10_000,
++                70_000, 60_000, WallpaperRotation.SEQUENTIAL, new Random(42));
++        assertEquals(images.get(0), wrapped.image);
++    }
++
++    @Test public void restartResumesPersistedImageAndSingleImageNeverRepeats() {
++        List<File> images = Arrays.asList(new File("first.jpg"), new File("second.jpg"));
++        String persistedName = "second.jpg";
++        long persistedTime = 20_000;
++        WallpaperRotation.Playback afterRestart = WallpaperRotation.select(images, persistedName,
++                persistedTime, 20_001, 300_000, WallpaperRotation.SEQUENTIAL, new Random(42));
++        assertEquals("second.jpg", afterRestart.image.getName());
++        assertEquals(persistedTime, afterRestart.changedAt);
++
++        File only = new File("only.jpg");
++        WallpaperRotation.Playback due = WallpaperRotation.select(Collections.singletonList(only),
++                only.getName(), persistedTime, 320_000, 300_000, WallpaperRotation.SEQUENTIAL,
++                new Random(42));
++        assertEquals(only, due.image);
++        assertEquals(320_000, due.changedAt);
++    }
++
++    @Test public void shuffledPlaybackDoesNotImmediatelyRepeatAndMissingCurrentStartsAtFirst() {
++        List<File> images = Arrays.asList(new File("first.jpg"), new File("second.jpg"), new File("third.jpg"));
++        WallpaperRotation.Playback next = WallpaperRotation.select(images, "second.jpg", 1,
++                60_001, 60_000, WallpaperRotation.SHUFFLE, new Random(42));
++        assertNotEquals("second.jpg", next.image.getName());
++        WallpaperRotation.Playback initial = WallpaperRotation.select(images, "removed.jpg", 0,
++                100, 60_000, WallpaperRotation.SEQUENTIAL, new Random(42));
++        assertEquals(images.get(0), initial.image);
++    }
++
++    @Test public void companionPriorityRequiresSelectedCollectionAssetsToBeActive() {
++        File legacyWallpaper = new File("wallpaper.jpg");
++        File companionAsset = new File("companion-hash.jpg");
++        assertFalse(WallpaperRotation.companionCollectionActive(false,
++                Collections.singletonList(companionAsset), Collections.singletonList(legacyWallpaper)));
++        assertFalse(WallpaperRotation.companionCollectionActive(true,
++                Collections.singletonList(companionAsset), Collections.singletonList(legacyWallpaper)));
++        assertTrue(WallpaperRotation.companionCollectionActive(true,
++                Collections.singletonList(companionAsset), Collections.singletonList(companionAsset)));
++    }
+ }
+-- 
+2.55.0
+
+
+From 6534c9048946b7acc8baad1b20f253845a54c848 Mon Sep 17 00:00:00 2001
+From: Hari Haran <hharan618@gmail.com>
+Date: Tue, 20 Oct 2026 19:56:09 +0530
+Subject: [PATCH 4/4] feat(scheduling): checkpoint offline evaluator behind
+ capability gate
+
+---
+ .../com/gathin/tvhome/CompanionProvider.java  |  48 +-
+ .../com/gathin/tvhome/CompanionStore.java     |  21 +-
+ .../java/com/gathin/tvhome/MainActivity.java  |  23 +
+ .../java/com/gathin/tvhome/ThemeSchedule.java | 421 ++++++++++++++++++
+ .../com/gathin/tvhome/ThemeScheduleTest.java  | 193 ++++++++
+ 5 files changed, 699 insertions(+), 7 deletions(-)
+ create mode 100644 launcher/app/src/main/java/com/gathin/tvhome/ThemeSchedule.java
+ create mode 100644 launcher/app/src/test/java/com/gathin/tvhome/ThemeScheduleTest.java
+
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java b/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
+index 3a19145..67ecafb 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/CompanionProvider.java
+@@ -12,6 +12,7 @@ import android.util.Base64;
+ import org.json.*;
+ import java.io.*;
+ import java.nio.charset.StandardCharsets;
++import java.time.Instant;
+ import java.util.*;
+ import java.util.concurrent.*;
+ 
+@@ -45,14 +46,40 @@ public final class CompanionProvider extends ContentProvider {
+     }
+     static JSONObject overlay(Context context,JSONObject theme) {
+         try{
+-            JSONObject result=theme==null?new JSONObject():CompanionStore.copy(theme),overrides=store(context).overrides();
+-            if(overrides.length()==0)return theme;
+-            for(Iterator<String> it=overrides.keys();it.hasNext();){String key=it.next();result.put(key,overrides.get(key));}
++            JSONObject result=theme==null?new JSONObject():CompanionStore.copy(theme);
++            JSONObject settings=store(context).state().getJSONObject("settings");
++            for(Iterator<String> it=settings.keys();it.hasNext();){String key=it.next();result.put(key,settings.get(key));}
++            applySchedule(settings, Instant.now());
++            for(Iterator<String> it=settings.keys();it.hasNext();){String key=it.next();result.put(key,settings.get(key));}
+             return result;
+         }catch(Exception e){return theme;}
+     }
+     static List<File> selectedAssets(Context context) {
+-        try{return store(context).selectedAssets();}catch(Exception e){return Collections.emptyList();}
++        try{
++            CompanionStore source=store(context);JSONObject settings=source.state().getJSONObject("settings");
++            applySchedule(settings,Instant.now());
++            return source.selectedAssets(settings.optString("active_collection",""));
++        }catch(Exception e){return Collections.emptyList();}
++    }
++    static JSONObject effectiveSettings(Context context) throws Exception {
++        JSONObject settings=store(context).state().getJSONObject("settings");
++        applySchedule(settings,Instant.now());return settings;
++    }
++    static String effectiveThemeFingerprint(Context context) {
++        try{
++            JSONObject settings=effectiveSettings(context),theme=new JSONObject();
++            for(String key:Arrays.asList("wallpaper","wallpaper_dim","background_color","accent_color","active_collection"))
++                if(settings.has(key))theme.put(key,settings.get(key));
++            return CompanionStore.hash(CompanionStore.canonical(theme).getBytes(StandardCharsets.UTF_8));
++        }catch(Exception failure){return "";}
++    }
++    private static JSONObject applySchedule(JSONObject settings,Instant now) throws Exception {
++        JSONObject schedule=settings.optJSONObject("theme_schedule");if(schedule==null)return null;
++        ThemeSchedule.Schedule parsed=ThemeSchedule.validate(schedule);
++        ThemeSchedule.ManualOverride manual=ThemeSchedule.manualOverride(settings.optJSONObject("theme_manual_override"));
++        ThemeSchedule.Effective effective=ThemeSchedule.effective(parsed,now,manual);
++        for(Iterator<String> it=effective.theme.keys();it.hasNext();){String key=it.next();settings.put(key,effective.theme.get(key));}
++        return ThemeSchedule.preview(schedule,now,8,manual);
+     }
+     static String revision(Context context) {
+         try{return store(context).state().getString("revision");}catch(Exception e){return "";}
+@@ -75,7 +102,18 @@ public final class CompanionProvider extends ContentProvider {
+                 case "capabilities":data=new JSONObject().put("protocol_version",1).put("launcher_version",BuildConfig.VERSION_NAME)
+                     .put("features",new JSONArray(Arrays.asList("collections_v1","atomic_activation_v1","revision_checks_v1","readback_v1")))
+                     .put("limits",new JSONObject().put("asset_bytes",CompanionStore.ASSET_BYTES).put("collection_bytes",CompanionStore.TOTAL_BYTES).put("asset_count",CompanionStore.ASSET_COUNT));break;
+-                case "state":data=store.state();break;
++                case "state":
++                    data=store.state();JSONObject effectiveSettings=CompanionStore.copy(data.getJSONObject("settings"));
++                    JSONObject preview=applySchedule(effectiveSettings,Instant.now());
++                    if(preview!=null)data.put("schedule_preview",preview).put("effective_settings",effectiveSettings);
++                    break;
++                case "schedule_preview":
++                    JSONObject schedule=request.getJSONObject("schedule");
++                    long now=request.has("now")?request.getLong("now"):System.currentTimeMillis();
++                    CompanionStore.require(now>=946684800000L && now<=4102444800000L,"invalid_request");
++                    int count=request.has("count")?request.getInt("count"):8;
++                    CompanionStore.require(count>=0 && count<=32,"invalid_request");
++                    data=ThemeSchedule.preview(schedule,Instant.ofEpochMilli(now),count);break;
+                 case "stage":data=store.stage(request);break;
+                 case "validate":data=store.validate(request.getString("session_id"));break;
+                 case "activate":data=store.activate(request);getContext().sendBroadcast(new Intent(ACTION_UPDATED).setPackage(getContext().getPackageName()));break;
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java b/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
+index d08c454..196be75 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/CompanionStore.java
+@@ -13,7 +13,8 @@ final class CompanionStore {
+     static final long ASSET_BYTES = 20L * 1024 * 1024, TOTAL_BYTES = 256L * 1024 * 1024;
+     static final int ASSET_COUNT = 200;
+     static final Set<String> KEYS = new HashSet<>(Arrays.asList("wallpaper", "wallpaper_rotation_minutes",
+-        "wallpaper_dim", "wallpaper_order", "active_collection", "background_color", "accent_color", "reduced_motion"));
++        "wallpaper_dim", "wallpaper_order", "active_collection", "background_color", "accent_color", "reduced_motion",
++        "theme_schedule", "theme_manual_override"));
+     interface Source { JSONObject read() throws Exception; }
+     interface Sync { void directory(File directory) throws Exception; }
+     interface ImageCheck { void verify(File image, String mime) throws Exception; }
+@@ -116,11 +117,23 @@ final class CompanionStore {
+                 case "wallpaper_dim": valid=integer(value,0,100);break;
+                 case "wallpaper_order":valid=value instanceof String && Arrays.asList("sequential","shuffle").contains(value);break;
+                 case "active_collection":valid=value instanceof String && hex((String)value,32);break;
++                case "theme_schedule":
++                    valid=value instanceof JSONObject;
++                    if(valid)try{ThemeSchedule.validate((JSONObject)value);}catch(IllegalArgumentException invalid){valid=false;}
++                    break;
++                case "theme_manual_override":
++                    valid=validManualOverride(value);
++                    break;
+                 default:valid=value instanceof String && ((String)value).matches("#[a-fA-F0-9]{6}");
+             }
+             require(valid,"invalid_request");
+         }
+     }
++    private static boolean validManualOverride(Object value) {
++        if(!(value instanceof JSONObject))return false;
++        try{ThemeSchedule.manualOverride((JSONObject)value);return true;}
++        catch(IllegalArgumentException invalid){return false;}
++    }
+     private File sessionFile(String id) throws Exception { require(hex(id,32),"invalid_request"); return new File(sessions,id+".json"); }
+     JSONObject session(String id) throws Exception { File file=sessionFile(id); require(file.isFile(),"unknown_session"); JSONObject value=read(file,new JSONObject());require(!value.optBoolean("discarded",false),"unknown_session");return value; }
+     private JSONObject manifestAsset(JSONObject session,String sha) throws Exception {
+@@ -216,7 +229,11 @@ final class CompanionStore {
+     }
+     synchronized JSONObject overrides() throws Exception {return copy(active().getJSONObject("settings"));}
+     synchronized List<File> selectedAssets() throws Exception {
+-        JSONObject active=active();String selected=active.getJSONObject("settings").optString("active_collection","");List<File> result=new ArrayList<>();
++        JSONObject active=active();String selected=active.getJSONObject("settings").optString("active_collection","");
++        return selectedAssets(selected);
++    }
++    synchronized List<File> selectedAssets(String selected) throws Exception {
++        JSONObject active=active();List<File> result=new ArrayList<>();
+         JSONArray collections=active.getJSONArray("collections");for(int i=0;i<collections.length();i++) {JSONObject c=collections.getJSONObject(i);if(!selected.equals(c.getString("id")))continue;JSONArray list=c.getJSONArray("assets");for(int j=0;j<list.length();j++){String sha=list.getJSONObject(j).getString("sha256");if(hex(sha,64)){File f=new File(assets,sha);if(f.isFile())result.add(f);}}}
+         return result;
+     }
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java b/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
+index e5e423b..3fca52c 100644
+--- a/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
++++ b/launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java
+@@ -93,11 +93,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     private FrameLayout root;
+     private WallpaperPlayer wallpaperPlayer;
+     private String companionRevision = "";
++    private String scheduleFingerprint = "";
+     private final BroadcastReceiver companionReceiver = new BroadcastReceiver() {
+         @Override public void onReceive(Context context, Intent intent) {
+             if (!companionRevision.equals(CompanionProvider.revision(MainActivity.this))) recreate();
+         }
+     };
++    private final BroadcastReceiver scheduleClockReceiver = new BroadcastReceiver() {
++        @Override public void onReceive(Context context, Intent intent) {
++            handler.post(MainActivity.this::refreshScheduledTheme);
++        }
++    };
+     private GlassView glass;
+     private View ambient;
+     private TextView heroName;
+@@ -202,6 +208,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     private final Runnable minuteTick = new Runnable() {
+         @Override
+         public void run() {
++            if (refreshScheduledTheme()) return;
+             updateGreeting();
+             updateWifiLabel();
+             sky.update();
+@@ -218,6 +225,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         // config.xml, overlaid by config.json from a pushed theme (see Config and tools/theme.sh).
+         Config cfg = Config.load(this);
+         companionRevision = CompanionProvider.revision(this);
++        scheduleFingerprint = CompanionProvider.effectiveThemeFingerprint(this);
+         COLUMNS = cfg.columns;
+         animations = cfg.animations;
+         advancedEffects = cfg.animations && cfg.advancedEffects;
+@@ -414,6 +422,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     @Override
+     protected void onStart() {
+         super.onStart();
++        IntentFilter clockFilter = new IntentFilter();
++        clockFilter.addAction(Intent.ACTION_TIME_CHANGED);
++        clockFilter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
++        clockFilter.addAction(Intent.ACTION_DATE_CHANGED);
++        registerReceiver(scheduleClockReceiver, clockFilter);
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+             registerReceiver(packageReceiver, packageFilter, Context.RECEIVER_NOT_EXPORTED);
+             registerReceiver(companionReceiver, new IntentFilter(CompanionProvider.ACTION_UPDATED), Context.RECEIVER_NOT_EXPORTED);
+@@ -427,6 +440,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+     protected void onResume() {
+         super.onResume();
+         if (!companionRevision.equals(CompanionProvider.revision(this))) { recreate(); return; }
++        if (refreshScheduledTheme()) return;
+         // A festival that started or ended while Home was in the background: rebuild with or without it.
+         if (festive != festival.active(LocalDate.now())) {
+             recreate();
+@@ -541,9 +555,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
+         super.onStop();
+         unregisterReceiver(packageReceiver);
+         unregisterReceiver(companionReceiver);
++        unregisterReceiver(scheduleClockReceiver);
+         rebuildOnResume = true;
+     }
+ 
++    /** Rebuilds Config and the wallpaper collection only when a schedule changes its effective theme. */
++    private boolean refreshScheduledTheme() {
++        String current = CompanionProvider.effectiveThemeFingerprint(this);
++        if (current.equals(scheduleFingerprint)) return false;
++        recreate();
++        return true;
++    }
++
+     @Override
+     public void onWindowFocusChanged(boolean hasFocus) {
+         super.onWindowFocusChanged(hasFocus);
+diff --git a/launcher/app/src/main/java/com/gathin/tvhome/ThemeSchedule.java b/launcher/app/src/main/java/com/gathin/tvhome/ThemeSchedule.java
+new file mode 100644
+index 0000000..7dc6345
+--- /dev/null
++++ b/launcher/app/src/main/java/com/gathin/tvhome/ThemeSchedule.java
+@@ -0,0 +1,421 @@
++package com.gathin.tvhome;
++
++import org.json.JSONArray;
++import org.json.JSONObject;
++
++import java.time.DateTimeException;
++import java.time.Instant;
++import java.time.LocalDate;
++import java.time.LocalDateTime;
++import java.time.LocalTime;
++import java.time.ZoneId;
++import java.time.ZoneOffset;
++import java.time.zone.ZoneOffsetTransition;
++import java.time.zone.ZoneRules;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.Comparator;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Locale;
++import java.util.Set;
++
++/**
++ * Pure, offline evaluator for launcher-local daily theme schedules.
++ *
++ * <p>Schema version 1 is:
++ * <pre>
++ * {"version":1,"timezone":"Area/City",
++ *  "location":{"latitude":12.3,"longitude":45.6},
++ *  "default_theme":{"background_color":"#000000"},
++ *  "rules":[
++ *   {"id":"evening","priority":10,
++ *    "trigger":{"type":"fixed","time":"18:30"},
++ *    "theme":{"active_collection":"0123456789abcdef0123456789abcdef"}},
++ *   {"id":"sunset","priority":20,
++ *    "trigger":{"type":"solar","event":"sunset","fallback_time":"19:00"},
++ *    "theme":{"accent_color":"#ffffff"}}]}
++ * }
++ * </pre>
++ * Theme objects are safe additive launcher overrides: background/accent colors, wallpaper enable,
++ * dim percent, and an optional active collection id. Rotation settings are intentionally excluded.
++ * Priorities are required, visible values from 0 through 100, and unique within a schedule.
++ * Fixed local times in DST gaps move to the first valid local time; overlaps use the earlier offset.
++ * Solar events use the NOAA approximation locally. Missing polar events resolve to the configured
++ * fixed-time fallback and mark the resulting transition as such.
++ */
++final class ThemeSchedule {
++    private static final Set<String> THEME_KEYS = new HashSet<>();
++    static {
++        Collections.addAll(THEME_KEYS, "background_color", "accent_color", "wallpaper",
++                "wallpaper_dim", "active_collection");
++    }
++
++    private ThemeSchedule() {}
++
++    static final class Rule {
++        final String id;
++        final int priority;
++        final String type;
++        final LocalTime time;
++        final String solarEvent;
++        final LocalTime fallbackTime;
++        final JSONObject theme;
++
++        Rule(String id, int priority, String type, LocalTime time, String solarEvent,
++             LocalTime fallbackTime, JSONObject theme) {
++            this.id = id;
++            this.priority = priority;
++            this.type = type;
++            this.time = time;
++            this.solarEvent = solarEvent;
++            this.fallbackTime = fallbackTime;
++            this.theme = theme;
++        }
++    }
++
++    static final class Schedule {
++        final ZoneId zone;
++        final double latitude;
++        final double longitude;
++        final JSONObject defaultTheme;
++        final List<Rule> rules;
++
++        Schedule(ZoneId zone, double latitude, double longitude, JSONObject defaultTheme,
++                 List<Rule> rules) {
++            this.zone = zone;
++            this.latitude = latitude;
++            this.longitude = longitude;
++            this.defaultTheme = defaultTheme;
++            this.rules = Collections.unmodifiableList(rules);
++        }
++    }
++
++    static final class Transition {
++        final Instant instant;
++        final String ruleId;
++        final int priority;
++        final JSONObject theme;
++        final boolean fallback;
++
++        Transition(Instant instant, Rule rule, JSONObject defaultTheme, boolean fallback) {
++            this.instant = instant;
++            this.ruleId = rule.id;
++            this.priority = rule.priority;
++            this.theme = merge(defaultTheme, rule.theme);
++            this.fallback = fallback;
++        }
++    }
++
++    static final class ManualOverride {
++        final JSONObject theme;
++        final Instant startedAt;
++
++        ManualOverride(JSONObject theme, Instant startedAt) {
++            validateTheme(theme, "manual override");
++            if (startedAt == null) throw new IllegalArgumentException("manual override start is required");
++            this.theme = copy(theme);
++            this.startedAt = startedAt;
++        }
++    }
++
++    static final class Effective {
++        final JSONObject theme;
++        final String ruleId;
++        final Instant transitionAt;
++        final boolean manual;
++        final boolean fallback;
++
++        Effective(JSONObject theme, String ruleId, Instant transitionAt, boolean manual,
++                  boolean fallback) {
++            this.theme = copy(theme);
++            this.ruleId = ruleId;
++            this.transitionAt = transitionAt;
++            this.manual = manual;
++            this.fallback = fallback;
++        }
++    }
++
++    /** Validates the complete version 1 schedule and returns an immutable parsed schedule. */
++    static Schedule validate(JSONObject json) {
++        if (json == null) throw new IllegalArgumentException("schedule is required");
++        exactKeys(json, "version", "timezone", "location", "default_theme", "rules");
++        if (integer(json.opt("version"), 1, 1) != 1) throw new IllegalArgumentException("unsupported schedule version");
++        ZoneId zone;
++        try {
++            zone = ZoneId.of(requiredString(json, "timezone"));
++        } catch (DateTimeException failure) {
++            throw new IllegalArgumentException("invalid timezone", failure);
++        }
++        JSONObject location = json.optJSONObject("location");
++        if (location == null) throw new IllegalArgumentException("location is required");
++        exactKeys(location, "latitude", "longitude");
++        double latitude = coordinate(location.opt("latitude"), -90, 90, "latitude");
++        double longitude = coordinate(location.opt("longitude"), -180, 180, "longitude");
++        JSONObject defaultTheme = json.optJSONObject("default_theme");
++        validateTheme(defaultTheme, "default theme");
++        JSONArray sourceRules = json.optJSONArray("rules");
++        if (sourceRules == null || sourceRules.length() > 64) throw new IllegalArgumentException("rules must be an array with at most 64 entries");
++
++        List<Rule> rules = new ArrayList<>();
++        Set<String> ids = new HashSet<>();
++        Set<LocalTime> fixedTimes = new HashSet<>();
++        Set<Integer> priorities = new HashSet<>();
++        for (int i = 0; i < sourceRules.length(); i++) {
++            JSONObject source = sourceRules.optJSONObject(i);
++            if (source == null) throw new IllegalArgumentException("each rule must be an object");
++            exactKeys(source, "id", "priority", "trigger", "theme");
++            String id = requiredString(source, "id");
++            if (!id.matches("[A-Za-z0-9_-]{1,64}") || !ids.add(id)) throw new IllegalArgumentException("invalid or duplicate rule id");
++            int priority = integer(source.opt("priority"), 0, 100);
++            if (priority < 0 || !priorities.add(priority)) throw new IllegalArgumentException("priority must be a unique integer from 0 to 100");
++            JSONObject trigger = source.optJSONObject("trigger");
++            if (trigger == null) throw new IllegalArgumentException("rule trigger is required");
++            String type = requiredString(trigger, "type");
++            LocalTime time = null;
++            String solarEvent = null;
++            LocalTime fallback = null;
++            if ("fixed".equals(type)) {
++                exactKeys(trigger, "type", "time");
++                time = parseTime(requiredString(trigger, "time"));
++                if (!fixedTimes.add(time)) throw new IllegalArgumentException("duplicate fixed-time boundary");
++            } else if ("solar".equals(type)) {
++                exactKeys(trigger, "type", "event", "fallback_time");
++                solarEvent = requiredString(trigger, "event");
++                if (!"sunrise".equals(solarEvent) && !"sunset".equals(solarEvent)) throw new IllegalArgumentException("solar event must be sunrise or sunset");
++                fallback = parseTime(requiredString(trigger, "fallback_time"));
++            } else {
++                throw new IllegalArgumentException("trigger type must be fixed or solar");
++            }
++            JSONObject theme = source.optJSONObject("theme");
++            validateTheme(theme, "rule theme");
++            rules.add(new Rule(id, priority, type, time, solarEvent, fallback, copy(theme)));
++        }
++        return new Schedule(zone, latitude, longitude, copy(defaultTheme), rules);
++    }
++
++    /** Returns the scheduled theme at now, or a manual theme until the first later transition. */
++    static Effective effective(Schedule schedule, Instant now, ManualOverride manualOverride) {
++        if (schedule == null || now == null) throw new IllegalArgumentException("schedule and time are required");
++        Transition active = latest(schedule, now);
++        if (manualOverride != null && !now.isBefore(manualOverride.startedAt)) {
++            Transition next = nextAfter(schedule, manualOverride.startedAt);
++            if (next == null || now.isBefore(next.instant)) {
++                JSONObject base = active == null ? schedule.defaultTheme : active.theme;
++                return new Effective(merge(base, manualOverride.theme), "manual", manualOverride.startedAt, true, false);
++            }
++        }
++        if (active == null) return new Effective(schedule.defaultTheme, "default", null, false, false);
++        return new Effective(active.theme, active.ruleId, active.instant, false, active.fallback);
++    }
++
++    static Effective effective(Schedule schedule, Instant now) {
++        return effective(schedule, now, null);
++    }
++
++    static ManualOverride manualOverride(JSONObject json) {
++        if (json == null) return null;
++        exactKeys(json, "theme", "started_at");
++        JSONObject theme = json.optJSONObject("theme");
++        validateTheme(theme, "manual override");
++        Object timestamp = json.opt("started_at");
++        if (!(timestamp instanceof Number)) throw new IllegalArgumentException("manual override start must be epoch milliseconds");
++        double millis = ((Number) timestamp).doubleValue();
++        if (millis < 0 || millis > 4102444800000d || millis != Math.floor(millis)) throw new IllegalArgumentException("invalid manual override start");
++        return new ManualOverride(theme, Instant.ofEpochMilli((long) millis));
++    }
++
++    /** Creates the preview payload used by both TV state and the companion protocol. */
++    static JSONObject preview(JSONObject json, Instant now, int count) {
++        return preview(json, now, count, null);
++    }
++
++    static JSONObject preview(JSONObject json, Instant now, int count, ManualOverride manualOverride) {
++        try {
++            Schedule schedule = validate(json);
++            Effective current = effective(schedule, now, manualOverride);
++            JSONObject effective = new JSONObject().put("theme", current.theme)
++                    .put("rule_id", current.ruleId).put("manual", current.manual)
++                    .put("fallback", current.fallback);
++            if (current.transitionAt != null) effective.put("transition_at", current.transitionAt.toEpochMilli());
++            JSONArray next = new JSONArray();
++            for (Transition transition : upcoming(schedule, now, count)) {
++                next.put(new JSONObject().put("at", transition.instant.toEpochMilli())
++                        .put("rule_id", transition.ruleId).put("priority", transition.priority)
++                        .put("theme", transition.theme).put("fallback", transition.fallback));
++            }
++            return new JSONObject().put("timezone", schedule.zone.getId())
++                    .put("effective", effective).put("upcoming", next);
++        } catch (Exception failure) {
++            throw new IllegalArgumentException("could not preview schedule", failure);
++        }
++    }
++
++    /** Returns the next count distinct effective boundaries after from, with collisions resolved. */
++    static List<Transition> upcoming(Schedule schedule, Instant from, int count) {
++        if (schedule == null || from == null || count < 0 || count > 256) throw new IllegalArgumentException("invalid upcoming transition request");
++        if (count == 0) return Collections.emptyList();
++        List<Transition> candidates = new ArrayList<>();
++        LocalDate first = from.atZone(schedule.zone).toLocalDate();
++        for (int day = 0; day < 370 && candidates.size() < count * 4 + 4; day++) {
++            candidates.addAll(transitionsOn(schedule, first.plusDays(day)));
++            List<Transition> resolved = resolve(candidates);
++            int future = 0;
++            for (Transition transition : resolved) if (transition.instant.isAfter(from)) future++;
++            if (future >= count) return firstTransitions(resolved, from, count);
++        }
++        return firstTransitions(resolve(candidates), from, count);
++    }
++
++    private static List<Transition> firstTransitions(List<Transition> resolved, Instant from, int count) {
++        List<Transition> result = new ArrayList<>();
++        for (Transition transition : resolved) {
++            if (transition.instant.isAfter(from)) result.add(transition);
++            if (result.size() == count) break;
++        }
++        return Collections.unmodifiableList(result);
++    }
++
++    private static Transition latest(Schedule schedule, Instant now) {
++        LocalDate date = now.atZone(schedule.zone).toLocalDate();
++        List<Transition> candidates = new ArrayList<>();
++        for (int offset = -2; offset <= 0; offset++) candidates.addAll(transitionsOn(schedule, date.plusDays(offset)));
++        Transition latest = null;
++        for (Transition transition : resolve(candidates)) {
++            if (!transition.instant.isAfter(now) && (latest == null || transition.instant.isAfter(latest.instant))) latest = transition;
++        }
++        return latest;
++    }
++
++    private static Transition nextAfter(Schedule schedule, Instant instant) {
++        List<Transition> transitions = upcoming(schedule, instant, 1);
++        return transitions.isEmpty() ? null : transitions.get(0);
++    }
++
++    private static List<Transition> transitionsOn(Schedule schedule, LocalDate date) {
++        List<Transition> transitions = new ArrayList<>();
++        for (Rule rule : schedule.rules) {
++            if ("fixed".equals(rule.type)) {
++                transitions.add(new Transition(resolveLocal(date.atTime(rule.time), schedule.zone), rule, schedule.defaultTheme, false));
++            } else {
++                Instant solar = solarEvent(date, schedule.latitude, schedule.longitude, rule.solarEvent);
++                boolean fallback = solar == null;
++                if (fallback) solar = resolveLocal(date.atTime(rule.fallbackTime), schedule.zone);
++                transitions.add(new Transition(solar, rule, schedule.defaultTheme, fallback));
++            }
++        }
++        return transitions;
++    }
++
++    private static List<Transition> resolve(List<Transition> candidates) {
++        candidates.sort(Comparator.comparing((Transition transition) -> transition.instant)
++                .thenComparing((Transition transition) -> -transition.priority)
++                .thenComparing(transition -> transition.ruleId));
++        List<Transition> result = new ArrayList<>();
++        for (Transition candidate : candidates) {
++            if (!result.isEmpty() && result.get(result.size() - 1).instant.equals(candidate.instant)) continue;
++            result.add(candidate);
++        }
++        return result;
++    }
++
++    private static Instant resolveLocal(LocalDateTime local, ZoneId zone) {
++        ZoneRules rules = zone.getRules();
++        List<ZoneOffset> offsets = rules.getValidOffsets(local);
++        if (offsets.size() == 1) return local.toInstant(offsets.get(0));
++        if (offsets.size() >= 2) return local.toInstant(offsets.get(0)); // earlier occurrence
++        ZoneOffsetTransition gap = rules.getTransition(local);
++        return gap.getDateTimeAfter().toInstant(gap.getOffsetAfter());
++    }
++
++    /** NOAA sunrise/sunset approximation; null means the event is absent for this local date. */
++    private static Instant solarEvent(LocalDate date, double latitude, double longitude, String event) {
++        double radians = Math.PI / 180.0;
++        double gamma = 2.0 * Math.PI / 365.0 * (date.getDayOfYear() - 1);
++        double equation = 229.18 * (0.000075 + 0.001868 * Math.cos(gamma) - 0.032077 * Math.sin(gamma)
++                - 0.014615 * Math.cos(2 * gamma) - 0.040849 * Math.sin(2 * gamma));
++        double declination = 0.006918 - 0.399912 * Math.cos(gamma) + 0.070257 * Math.sin(gamma)
++                - 0.006758 * Math.cos(2 * gamma) + 0.000907 * Math.sin(2 * gamma)
++                - 0.002697 * Math.cos(3 * gamma) + 0.00148 * Math.sin(3 * gamma);
++        double lat = latitude * radians;
++        double cosHourAngle = (Math.cos(90.833 * radians) - Math.sin(lat) * Math.sin(declination))
++                / (Math.cos(lat) * Math.cos(declination));
++        if (cosHourAngle > 1.0 || cosHourAngle < -1.0 || Double.isNaN(cosHourAngle)) return null;
++        double hourAngle = Math.acos(cosHourAngle) / radians;
++        double minutes = 720 - 4 * longitude - equation
++                + ("sunset".equals(event) ? 4 * hourAngle : -4 * hourAngle);
++        long millis = Math.round(minutes * 60_000.0);
++        return date.atStartOfDay(ZoneOffset.UTC).toInstant().plusMillis(millis);
++    }
++
++    private static void validateTheme(JSONObject theme, String label) {
++        if (theme == null || theme.length() == 0) throw new IllegalArgumentException(label + " must be a nonempty object");
++        for (String key : keys(theme)) {
++            if (!THEME_KEYS.contains(key)) throw new IllegalArgumentException("unsupported theme key: " + key);
++            Object value = theme.opt(key);
++            boolean valid;
++            switch (key) {
++                case "wallpaper": valid = value instanceof Boolean; break;
++                case "wallpaper_dim": valid = integer(value, 0, 100) >= 0; break;
++                case "active_collection": valid = value instanceof String && ((String) value).matches("[a-f0-9]{32}"); break;
++                default: valid = value instanceof String && ((String) value).matches("#[A-Fa-f0-9]{6}");
++            }
++            if (!valid) throw new IllegalArgumentException("invalid theme value: " + key);
++        }
++    }
++
++    private static JSONObject merge(JSONObject base, JSONObject override) {
++        JSONObject result = copy(base);
++        for (String key : keys(override)) {
++            try { result.put(key, override.get(key)); }
++            catch (Exception failure) { throw new IllegalArgumentException("invalid theme", failure); }
++        }
++        return result;
++    }
++
++    private static void exactKeys(JSONObject object, String... allowed) {
++        Set<String> keys = new HashSet<>(); Collections.addAll(keys, allowed);
++        for (String key : keys(object)) if (!keys.contains(key)) throw new IllegalArgumentException("unknown field: " + key);
++        for (String key : allowed) if (!object.has(key)) throw new IllegalArgumentException("missing field: " + key);
++    }
++
++    private static List<String> keys(JSONObject object) {
++        List<String> result = new ArrayList<>();
++        java.util.Iterator<String> iterator = object.keys();
++        while (iterator.hasNext()) result.add(iterator.next());
++        return result;
++    }
++
++    private static String requiredString(JSONObject object, String key) {
++        Object value = object.opt(key);
++        if (!(value instanceof String) || ((String) value).trim().isEmpty()) throw new IllegalArgumentException(key + " is required");
++        return ((String) value).trim();
++    }
++
++    private static LocalTime parseTime(String value) {
++        try {
++            if (!value.matches("(?:[01]\\d|2[0-3]):[0-5]\\d")) throw new DateTimeException("format");
++            return LocalTime.parse(value);
++        } catch (DateTimeException failure) {
++            throw new IllegalArgumentException("time must be HH:mm", failure);
++        }
++    }
++
++    private static int integer(Object value, int min, int max) {
++        if (!(value instanceof Number)) return -1;
++        double number = ((Number) value).doubleValue();
++        return number >= min && number <= max && number == Math.floor(number) ? (int) number : -1;
++    }
++
++    private static double coordinate(Object value, double min, double max, String name) {
++        if (!(value instanceof Number)) throw new IllegalArgumentException("invalid " + name);
++        double number = ((Number) value).doubleValue();
++        if (Double.isNaN(number) || Double.isInfinite(number) || number < min || number > max) throw new IllegalArgumentException("invalid " + name);
++        return number;
++    }
++
++    private static JSONObject copy(JSONObject object) {
++        try { return new JSONObject(object.toString()); }
++        catch (Exception failure) { throw new IllegalArgumentException("invalid JSON object", failure); }
++    }
++}
+diff --git a/launcher/app/src/test/java/com/gathin/tvhome/ThemeScheduleTest.java b/launcher/app/src/test/java/com/gathin/tvhome/ThemeScheduleTest.java
+new file mode 100644
+index 0000000..c5a38ce
+--- /dev/null
++++ b/launcher/app/src/test/java/com/gathin/tvhome/ThemeScheduleTest.java
+@@ -0,0 +1,193 @@
++package com.gathin.tvhome;
++
++import org.json.JSONArray;
++import org.json.JSONObject;
++import org.junit.Test;
++
++import java.time.Instant;
++import java.time.LocalDate;
++import java.time.LocalTime;
++import java.time.ZoneId;
++import java.util.List;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++import static org.junit.Assert.fail;
++
++public class ThemeScheduleTest {
++    private static JSONObject theme(String color) throws Exception {
++        return new JSONObject().put("background_color", color);
++    }
++
++    private static JSONObject fixed(String id, int priority, String time, String color) throws Exception {
++        return new JSONObject().put("id", id).put("priority", priority)
++                .put("trigger", new JSONObject().put("type", "fixed").put("time", time))
++                .put("theme", theme(color));
++    }
++
++    private static JSONObject solar(String id, int priority, String event, String fallback,
++                                    String color) throws Exception {
++        return new JSONObject().put("id", id).put("priority", priority)
++                .put("trigger", new JSONObject().put("type", "solar").put("event", event)
++                        .put("fallback_time", fallback)).put("theme", theme(color));
++    }
++
++    private static JSONObject schedule(String zone, double latitude, double longitude,
++                                       JSONArray rules) throws Exception {
++        return new JSONObject().put("version", 1).put("timezone", zone)
++                .put("location", new JSONObject().put("latitude", latitude).put("longitude", longitude))
++                .put("default_theme", theme("#000000")).put("rules", rules);
++    }
++
++    @Test public void polarMissingSunsetUsesLocalFallbackAndMarksIt() throws Exception {
++        ThemeSchedule.Schedule parsed = ThemeSchedule.validate(schedule("Europe/Oslo", 69.65, 18.96,
++                new JSONArray().put(solar("polar_sunset", 5, "sunset", "22:15", "#ffffff"))));
++        Instant before = Instant.parse("2026-06-21T18:00:00Z");
++        List<ThemeSchedule.Transition> next = ThemeSchedule.upcoming(parsed, before, 1);
++        assertEquals(1, next.size());
++        assertEquals(Instant.parse("2026-06-21T20:15:00Z"), next.get(0).instant);
++        assertTrue(next.get(0).fallback);
++        ThemeSchedule.Effective effective = ThemeSchedule.effective(parsed,
++                Instant.parse("2026-06-21T20:16:00Z"));
++        assertEquals("polar_sunset", effective.ruleId);
++        assertTrue(effective.fallback);
++    }
++
++    @Test public void dstGapMovesToFirstValidTimeAndRepeatedTimeUsesEarlierOffsetOnce() throws Exception {
++        ThemeSchedule.Schedule gap = ThemeSchedule.validate(schedule("America/New_York", 40.7, -74,
++                new JSONArray().put(fixed("gap", 1, "02:30", "#111111"))));
++        ThemeSchedule.Transition gapTransition = ThemeSchedule.upcoming(gap,
++                Instant.parse("2026-03-08T05:00:00Z"), 1).get(0);
++        assertEquals(Instant.parse("2026-03-08T07:00:00Z"), gapTransition.instant);
++
++        ThemeSchedule.Schedule overlap = ThemeSchedule.validate(schedule("America/New_York", 40.7, -74,
++                new JSONArray().put(fixed("repeat", 1, "01:30", "#222222"))));
++        List<ThemeSchedule.Transition> transitions = ThemeSchedule.upcoming(overlap,
++                Instant.parse("2026-11-01T04:00:00Z"), 2);
++        assertEquals(Instant.parse("2026-11-01T05:30:00Z"), transitions.get(0).instant);
++        assertFalse(transitions.get(1).instant.equals(Instant.parse("2026-11-01T06:30:00Z")));
++    }
++
++    @Test public void midnightAndExplicitTimezoneDetermineCurrentTheme() throws Exception {
++        ThemeSchedule.Schedule parsed = ThemeSchedule.validate(schedule("Asia/Kolkata", 12.9, 77.6,
++                new JSONArray().put(fixed("midnight", 1, "00:15", "#abcdef"))));
++        ThemeSchedule.Effective before = ThemeSchedule.effective(parsed,
++                Instant.parse("2026-01-01T18:40:00Z")); // Jan 2, 00:10 in the saved timezone.
++        assertEquals("midnight", before.ruleId); // The prior day's transition remains effective.
++        ThemeSchedule.Effective after = ThemeSchedule.effective(parsed,
++                Instant.parse("2026-01-01T18:50:00Z"));
++        assertEquals("midnight", after.ruleId);
++        assertEquals(Instant.parse("2026-01-01T18:45:00Z"), after.transitionAt);
++        assertEquals("#abcdef", after.theme.getString("background_color"));
++    }
++
++    @Test public void coincidentSolarAndFixedBoundariesUseHigherVisiblePriorityOnce() throws Exception {
++        ThemeSchedule.Schedule solarOnly = ThemeSchedule.validate(schedule("America/Chicago", 41.9, -87.6,
++                new JSONArray().put(solar("sunrise", 20, "sunrise", "06:00", "#eeeeee"))));
++        Instant from = Instant.parse("2026-04-10T00:00:00Z");
++        Instant rise = ThemeSchedule.upcoming(solarOnly, from, 1).get(0).instant;
++        String matchingLocalMinute = LocalTime.ofInstant(rise, solarOnly.zone).withSecond(0)
++                .withNano(0).toString();
++        JSONObject combined = schedule("America/Chicago", 41.9, -87.6,
++                new JSONArray().put(fixed("fixed", 10, matchingLocalMinute, "#111111"))
++                        .put(solar("sunrise", 20, "sunrise", "06:00", "#eeeeee")));
++        ThemeSchedule.Schedule parsed = ThemeSchedule.validate(combined);
++        ThemeSchedule.Effective effective = ThemeSchedule.effective(parsed, rise.plusSeconds(1));
++        assertEquals("sunrise", effective.ruleId);
++        assertEquals("#eeeeee", effective.theme.getString("background_color"));
++        assertEquals(1, ThemeSchedule.upcoming(parsed, rise.minusSeconds(1), 1).size());
++    }
++
++    @Test public void manualOverrideExpiresAtTheNextTransition() throws Exception {
++        ThemeSchedule.Schedule parsed = ThemeSchedule.validate(schedule("UTC", 0, 0,
++                new JSONArray().put(fixed("morning", 1, "08:00", "#112233"))));
++        Instant started = Instant.parse("2026-05-04T07:00:00Z");
++        ThemeSchedule.ManualOverride override = new ThemeSchedule.ManualOverride(theme("#445566"), started);
++        ThemeSchedule.Effective active = ThemeSchedule.effective(parsed,
++                Instant.parse("2026-05-04T07:59:59Z"), override);
++        assertTrue(active.manual);
++        assertEquals("#445566", active.theme.getString("background_color"));
++        ThemeSchedule.Effective expired = ThemeSchedule.effective(parsed,
++                Instant.parse("2026-05-04T08:00:00Z"), override);
++        assertFalse(expired.manual);
++        assertEquals("morning", expired.ruleId);
++    }
++
++    @Test public void ruleThemeMergesOnTopOfDefaultAndManualFieldsLayerOnCurrentTheme() throws Exception {
++        JSONObject base = new JSONObject().put("background_color", "#101010")
++                .put("accent_color", "#202020");
++        JSONObject ruleTheme = new JSONObject().put("active_collection", "0123456789abcdef0123456789abcdef");
++        JSONObject rule = new JSONObject().put("id", "accent").put("priority", 1)
++                .put("trigger", new JSONObject().put("type", "fixed").put("time", "08:00"))
++                .put("theme", ruleTheme);
++        ThemeSchedule.Schedule parsed = ThemeSchedule.validate(new JSONObject()
++                .put("version", 1).put("timezone", "UTC")
++                .put("location", new JSONObject().put("latitude", 0).put("longitude", 0))
++                .put("default_theme", base).put("rules", new JSONArray().put(rule)));
++        ThemeSchedule.Effective scheduled = ThemeSchedule.effective(parsed,
++                Instant.parse("2026-05-04T09:00:00Z"));
++        assertEquals("#101010", scheduled.theme.getString("background_color"));
++        assertEquals("#202020", scheduled.theme.getString("accent_color"));
++        assertEquals("0123456789abcdef0123456789abcdef", scheduled.theme.getString("active_collection"));
++
++        ThemeSchedule.ManualOverride override = new ThemeSchedule.ManualOverride(
++                new JSONObject().put("accent_color", "#303030"), Instant.parse("2026-05-04T09:30:00Z"));
++        ThemeSchedule.Effective manual = ThemeSchedule.effective(parsed,
++                Instant.parse("2026-05-04T09:45:00Z"), override);
++        assertEquals("#101010", manual.theme.getString("background_color"));
++        assertEquals("#303030", manual.theme.getString("accent_color"));
++        assertEquals("0123456789abcdef0123456789abcdef", manual.theme.getString("active_collection"));
++    }
++
++    @Test public void manualOverrideWithNoRulesLastsUntilCancellation() throws Exception {
++        ThemeSchedule.Schedule parsed = ThemeSchedule.validate(schedule("UTC", 0, 0, new JSONArray()));
++        ThemeSchedule.ManualOverride override = new ThemeSchedule.ManualOverride(theme("#445566"),
++                Instant.parse("2026-05-04T07:00:00Z"));
++        ThemeSchedule.Effective manual = ThemeSchedule.effective(parsed,
++                Instant.parse("2030-01-01T00:00:00Z"), override);
++        assertTrue(manual.manual);
++        assertEquals("#445566", manual.theme.getString("background_color"));
++        assertFalse(ThemeSchedule.effective(parsed, Instant.parse("2030-01-01T00:00:00Z")).manual);
++    }
++
++    @Test public void fixedTransitionsRecomputeAgainstTheSavedTimezone() throws Exception {
++        ThemeSchedule.Schedule parsed = ThemeSchedule.validate(schedule("Pacific/Auckland", -36.85, 174.76,
++                new JSONArray().put(fixed("morning", 1, "08:00", "#123456"))));
++        ThemeSchedule.Transition first = ThemeSchedule.upcoming(parsed,
++                Instant.parse("2026-01-01T00:00:00Z"), 1).get(0);
++        ThemeSchedule.Schedule changedZone = ThemeSchedule.validate(schedule("America/Los_Angeles", -36.85, 174.76,
++                new JSONArray().put(fixed("morning", 1, "08:00", "#123456"))));
++        ThemeSchedule.Transition second = ThemeSchedule.upcoming(changedZone,
++                Instant.parse("2026-01-01T00:00:00Z"), 1).get(0);
++        assertNotNull(first);
++        assertNotNull(second);
++        assertFalse(first.instant.equals(second.instant));
++    }
++
++    @Test public void invalidSchemaDuplicateFixedTimeAndInvalidPriorityAreRejected() throws Exception {
++        expectInvalid(() -> ThemeSchedule.validate(schedule("UTC", 0, 0,
++                new JSONArray().put(fixed("one", 1, "08:00", "#111111"))
++                        .put(fixed("two", 2, "08:00", "#222222")))));
++        JSONObject invalidPriority = fixed("bad", 101, "08:00", "#111111");
++        expectInvalid(() -> ThemeSchedule.validate(schedule("UTC", 0, 0,
++                new JSONArray().put(invalidPriority))));
++        expectInvalid(() -> ThemeSchedule.validate(schedule("UTC", 0, 0,
++                new JSONArray().put(fixed("first", 5, "08:00", "#111111"))
++                        .put(fixed("second", 5, "09:00", "#222222")))));
++        expectInvalid(() -> ThemeSchedule.validate(schedule("Not/AZone", 0, 0, new JSONArray())));
++        expectInvalid(() -> ThemeSchedule.validate(schedule("UTC", 91, 0, new JSONArray())));
++    }
++
++    private static void expectInvalid(Throwing action) throws Exception {
++        try {
++            action.run();
++            fail("expected invalid schedule");
++        } catch (IllegalArgumentException expected) {
++            // expected
++        }
++    }
++
++    private interface Throwing { void run() throws Exception; }
++}
+-- 
+2.55.0
+

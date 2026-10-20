@@ -37,7 +37,13 @@ and connection controls must not execute from demo mode. No network image/font d
 
 ## Read-only live test
 
-Use Connect a TV → discovery or enter the private IPv4 address and current debugging port. For first
+Open the native app and confirm discovery starts immediately. Use Connect a TV to select a result,
+retry discovery, or enter the private IPv4 address and current debugging port. Stop search must end
+the waiting state and ignore late results. A previously selected TV can reconnect only after its
+serial/manufacturer/model/firmware/user identity is verified without ambiguity. Missing identity,
+revoked authorization or duplicate matches must require selection. The remembered identity is stored
+in local app data as remembered-tv.json; deleting that file forgets the preference. It contains no
+provider credentials or pairing codes. Firmware changes can require selecting the TV again. For first
 pairing, enter the separate pairing address and six-digit code from the TV. Pairing adds trust on both
 ends and ADB can create host keys/start a host server. This grants broad debug access; revoke the
 computer in the TV's debugging settings when finished. The preview does not change packages, HOME,

@@ -53,3 +53,62 @@ Actual DLL-lock upgrade behavior is for the owner to verify using the steps in T
 
 The installer uses path-scoped Windows Restart Manager resources before interactive legacy removal,
 installation/update and uninstallation. It does not run blanket ADB process-name kills or remove keys.
+
+## Automatic discovery implementation · in progress
+
+The OpenSpec change automatic-tv-discovery-and-wallpaper-personalization currently adds explicit
+connection states, cancellation/stale-result guards, startup discovery, remembered-TV identity checks,
+and connection feedback. pnpm check, pnpm test, pnpm build and 13 Playwright tests pass locally.
+These browser checks exercise mocked native IPC, not a physical TV.
+
+After the host development dependencies were installed, all six Rust tests passed and
+`pnpm tauri build --debug --no-bundle` succeeded. A regression test covers one physical TV exposed
+through both its IP endpoint and ADB mDNS alias; discovery canonicalizes those aliases before identity
+matching. Missing/duplicate identities and unreadable candidates still require selection.
+
+Native Linux verification used the actual Tauri/GTK window and an isolated XDG app profile under
+/tmp. On first launch, automatic discovery found the existing TV; selecting Check TV inspected it
+without changing its configuration and saved a five-field identity preference with mode 0600.
+Closing and reopening the build reached the live dashboard automatically, without selecting a device
+or re-pairing. The actual TV remained on its existing launcher with its two disabled packages intact.
+This verifies the documented fresh-profile/returning flow on Linux with an already authorized TV;
+it does not establish new-TV pairing, Windows/macOS behavior, or wallpaper-write correctness.
+The companion still exposes no wallpaper Apply controls or TV scheduling controls.
+
+## Launcher protocol candidate
+
+The isolated owner-runtime branch delivers a version 1 provider and private transaction store.
+69 launcher tests pass, including seven new transaction tests. The matching-signature local release
+2.5-companion.2 was installed and launched successfully. A wrong initial source base omitted the
+owner's existing Unsplash customization; it was corrected to the actual installed runtime source
+before completing compatibility verification. The delivered candidate includes those existing
+wallpaper and remote-key additions. Theme bytes, HOME selection and disabled packages are unchanged.
+
+Device smoke tests verified capabilities/safe state, unsupported protocol rejection, private-setting
+rejection, a truncated upload followed by a complete verified PNG, stale activation rejection and
+idempotent discard. Staged media was never activated. A temporary Android test application was denied
+both provider calls and asset streams and was removed afterward. These are actual Android Binder/pipe
+checks, separate from browser IPC fixtures. The local source patch and nonsecret release evidence are
+under integrations/. No signing key, private theme, provider token or TV backup is included there.
+
+## Native review journal
+
+18 Rust tests pass after adding typed protocol transport, collection-manifest validation, local plans,
+private journal writes, exact override baselines and device locks. One ignored harness helper is run
+explicitly in subprocesses by the cross-process lock test; it is not a skipped behavior check.
+Interrupted journal replacement leaves either the previous complete record or the new complete
+record. A plan for another identity, an expired review or a changed TV revision is rejected before
+writing. Restoration refuses later changes to owned values and preserves unrelated settings.
+
+## 2026-10-20 source checkpoint (offline only)
+
+The user paused implementation and requested conventional commits/pushes plus [HANDOFF.md](../HANDOFF.md).
+After the user prohibited live testing, no TV checks or installations were performed; the owned native
+test window was terminated. Latest source has not been installed on the TV.
+
+Checkpoint validation: Svelte check 0 errors/warnings; 21 JavaScript tests; 34 Rust tests passed
+(one ignored subprocess helper is explicitly exercised by its parent); 13 existing mocked Playwright
+tests; Vite production build; launcher offline `assembleRelease testReleaseUnitTest`; strict OpenSpec
+validation. Editor-specific browser coverage and physical acceptance remain pending. Launcher scheduling
+is committed as work in progress with `theme_schedules_v1` absent from capabilities. See the handoff
+for incomplete integration and UI review findings before enabling or releasing write features.
