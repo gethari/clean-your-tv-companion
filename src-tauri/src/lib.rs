@@ -94,7 +94,7 @@ async fn discover(app: tauri::AppHandle) -> Result<Vec<Device>, String> {
                 if endpoint_valid(address) && !result.iter().any(|d| d.endpoint == *address) {
                     let pairing = line.contains("_adb-tls-pairing");
                     result.push(Device { endpoint: (*address).into(), status: "Advertised · not yet inspected".into(),
-                        kind: if pairing { "Pairing service".into() } else { "Connection service".into() } });
+                        kind: if pairing { "Pairing service".into() } else if line.contains("_adb-tls-connect") { "Connection service".into() } else { "Legacy connection service".into() } });
                 }
             }
         }

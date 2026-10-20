@@ -37,3 +37,10 @@ export const scenarios = {
     home: null, packages: null, disabled: null, theme: null, isTv: null,
     errors: ['Connection interrupted. Keep the TV awake and check its current debugging port.'], collectedAt: 'Demo snapshot' }
 };
+
+export function pairingCandidates(devices, host) {
+  return [...new Set(devices.filter(device => device.endpoint.startsWith(host + ':') &&
+    (device.kind === 'Connection service' ||
+      (device.kind === 'Connected device' && device.status === 'device' && !device.endpoint.endsWith(':5555')))
+  ).map(device => device.endpoint))];
+}

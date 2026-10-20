@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { assess, parseEndpoint, scenarios } from './state.mjs';
+  import { assess, parseEndpoint, pairingCandidates, scenarios } from './state.mjs';
   const native = '__TAURI_INTERNALS__' in window;
   type Snapshot = {launcherVersion?: string|null; model: string|null; manufacturer: string|null; androidVersion: string|null; home: string|null; packages: string[]|null; disabled: string[]|null; theme: Record<string, any>|null; isTv: boolean|null; errors: string[]; collectedAt: string};
   type Device = {endpoint: string; status: string; kind: string};
@@ -61,10 +61,7 @@
       } catch {
         devices = [];
       }
-      const matches = [...new Set(devices.filter(device =>
-        device.endpoint.startsWith(host + ':') && device.kind !== 'Pairing service'
-        && (device.status === 'device' || device.kind === 'Connection service')
-      ).map(device => device.endpoint))];
+      const matches = pairingCandidates(devices, host);
       if (matches.length === 1) {
         endpoint = matches[0];
         busy = 'Paired. Connecting and checking your TV…';
