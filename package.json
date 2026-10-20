@@ -1,0 +1,26 @@
+{
+  "name": "clean-your-tv-companion",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "node --test tests/*.test.mjs",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "svelte": "^5"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6",
+    "@tauri-apps/cli": "^2",
+    "svelte-check": "^4",
+    "typescript": "^5",
+    "vite": "^7",
+    "@playwright/test": "^1.56"
+  },
+  "packageManager": "pnpm@12.8.1"
+}

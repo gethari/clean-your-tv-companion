@@ -1,0 +1,80 @@
+name: Desktop preview
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec playwright test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: design-preview-results
+          path: test-results/
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            bundle: appimage,deb
+            label: linux
+          - os: windows-latest
+            bundle: nsis
+            label: windows
+          - os: macos-latest
+            bundle: dmg
+            label: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev patchelf libayatana-appindicator3-dev
+      - run: pnpm install --frozen-lockfile
+      - run: python scripts/fetch-adb.py
+      - run: pnpm tauri icon assets/app.svg
+      - run: pnpm build
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: pnpm tauri build --bundles ${{ matrix.bundle }}
+        env:
+          NO_STRIP: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion-${{ matrix.label }}
+          path: |
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/resources/platform-tools/provenance.json
+            src-tauri/Cargo.lock
+          if-no-files-found: error
+          retention-days: 14

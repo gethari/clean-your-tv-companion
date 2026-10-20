@@ -12,10 +12,10 @@ to the device executor/journal. Each milestone is a branch/PR; no requirement fo
 
 Context: empty companion repository; upstream scripts are reference only. Build Tauri/Svelte scaffold,
 read-only discovery/connect/pair/inspect IPC, demo scenarios for fresh/existing/disconnected TVs, and
-native build matrix with bundled ADB. No writes. Use fixtures stripped of identifying details.
-Verification: `npm ci && npm run check && npm test && npm run build`; `cargo test --manifest-path
+native build matrix with bundled ADB. No TV package, HOME or settings changes (pairing persists trust). Use fixtures stripped of identifying details.
+Verification: `pnpm install --frozen-lockfile && pnpm check && pnpm test && pnpm build`; `cargo test --manifest-path
 src-tauri/Cargo.toml`; platform CI bundles. Real TV read-only smoke check and Linux/Windows launch.
-Exit: observable failures stay unknown, demo clearly labeled, no mutation IPC, CI produces testable
+Exit: observable failures stay unknown, demo clearly labeled, no package/settings mutation IPC, CI produces testable
 installers. Rollback: revert preview commit; no TV changes to reverse. Commit: feat(preview).
 
 ## M2 · Trustworthy device audit and connection recovery
@@ -86,3 +86,11 @@ installer and recovery docs. Commit: chore(release).
 Change scope/dependencies here and in PRODUCT together. Add evidence and new caveats as discovered;
 never silently broaden supported devices. A failed gate blocks the related feature, not all read-only
 value. Record plan review findings and disposition in docs/REVIEW.md.
+
+## Adversarial review amendments
+
+M2: test identical TVs and IP reuse; ambiguous identity requires reselection and blocks old plans.
+M3: compare-and-set restore, cross-process locks, external ADB drift, disk-full/unwritable baseline and
+journal retention/export tests are required. M4: APK/data rollback is not guaranteed; show limitations
+before install and keep HOME/config compensation distinct. M6: native human launch verification is
+separate from CI build completion. Scope review findings are recorded in docs/REVIEW.md.

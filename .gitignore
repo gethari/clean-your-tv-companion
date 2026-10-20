@@ -8,3 +8,6 @@ artifacts/
 playwright-report/
 test-results/
 .DS_Store
+src-tauri/gen/
+src-tauri/icons/android/
+src-tauri/icons/ios/

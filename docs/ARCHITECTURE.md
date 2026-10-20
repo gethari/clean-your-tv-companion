@@ -15,7 +15,7 @@ as discovery cleanup. Isolated app-owned key/server strategy is a later explicit
 
 Preview IPC: `discover`, `connect_device(endpoint)`, `pair_device(endpoint, code)`, `inspect_device(serial)`.
 Strict LAN endpoint syntax, separate pairing-code validation; code goes to ADB stdin, never logs/argv.
-Preview has no mutation IPC. Discovery is connected-device + mDNS discovery; subnet sweep is deferred,
+Preview has no package, HOME or settings mutation IPC. Pairing creates persistent trust and ADB can create host keys/start its server; revoking trust is a TV-side action. Discovery is connected-device + mDNS discovery; subnet sweep is deferred,
 limited to user-selected private interface and explicit opt-in. mDNS does not identify manufacturer/OS.
 
 ## Observation versus intent
@@ -71,3 +71,18 @@ production gate pins a reviewed archive hash instead of mutable latest. Windows 
 AppImage/deb and macOS DMG. App icons are original local vector artwork; no external image dependency.
 Public stable requires native smoke tests, code signing/notarization and reviewed redistribution notices.
 Unsigned preview downloads are labeled; do not tell users to disable antivirus or global OS protections.
+
+## Recovery limits and conflicts
+
+Restore compares current state with our last verified applied state before writing the recorded prior
+value. Later manual/firmware changes create a conflict: Keep current or Restore recorded value, with
+explicit review. No blind overwrite. APK/data rollback is not generally supported: installing updates
+can migrate data and Android may refuse downgrades. Launcher rollback restores HOME/config where
+possible, not an earlier APK/data snapshot. Explain this distinction before installation.
+
+Use an OS-level per-device lock across companion instances; external ADB tools can still change a TV,
+so recheck preconditions immediately before every operation and stop on unexpected postconditions.
+Fail closed if identity is ambiguous, including identical TVs or reused IP addresses. Nicknames are not
+identity proof. Verify baseline/journal storage is writable with enough space before a mutation; retain
+journals on uninstall or offer explicit export/removal. Restrict in-app navigation to bundled content;
+any future external links open in the system browser through a narrow allowlist.

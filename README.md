@@ -22,17 +22,17 @@ NSIS setup `.exe`, Linux an AppImage and `.deb`, macOS a `.dmg`. These are unsig
 A GitHub login may be needed to download CI artifacts; the installed app has no login requirement.
 See [testing instructions](docs/TESTING.md). Artifacts are available only after the workflow passes.
 
-Development: Node 22+ and npm, Rust stable, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Development: Node 22+ and pnpm, Rust stable, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
-npm ci
-npm run check
-npm test
-npm run dev          # browser design preview; no real device commands
-npm run tauri dev    # desktop app; use bundled ADB or CYTV_ADB_PATH during development
+pnpm install --frozen-lockfile
+pnpm check
+pnpm test
+pnpm dev          # browser design preview; no real device commands
+pnpm tauri dev    # desktop app; use bundled ADB or CYTV_ADB_PATH during development
 ```
 
-`npm run dev` always displays a visible **Demo** indicator and never touches a TV. Choose a scenario
+`pnpm dev` always displays a visible **Demo** indicator and never touches a TV. Choose a scenario
 in the app to inspect a fresh TV, an existing TCL setup, or an interrupted connection.
 Desktop inspection requires enabling debugging and approving your computer on the TV. Pairing and
 connection ports can differ and change after sleep or reboot. The app never silently enables plaintext

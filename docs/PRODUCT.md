@@ -87,3 +87,15 @@ Complete setup with remote + laptop and zero terminal instructions. Reopening pr
 mutations. Injected interruption after every mutation can resume/reconcile without repeating an unknown
 operation. No lost pre-existing customizations. Every failure provides a useful next step. Real usability
 sessions with novice testers on Windows/Linux precede a public stable release.
+
+## This iteration and restore boundaries
+
+Deliverables now: public scoped repository, Tauri inspection/demo preview, and native test installers
+when their CI builds pass. Modifying workflows remain later milestones. A successful CI build does not
+mean the installer has been tested on a physical Windows/macOS desktop; record those separately.
+Pairing adds debug trust; inspection does not change TV package, HOME or wallpaper configuration.
+
+A baseline is not a full APK/application-data/firmware backup. Restore settings and enablement only
+while detecting conflicts with later changes. Earlier APK versions/data are not promised recoverable.
+Installation review must state this limit. Public signing may cost the maintainer money; using the
+installed companion has no account, AI or subscription requirement.
