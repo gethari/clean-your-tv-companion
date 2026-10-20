@@ -6,6 +6,10 @@ authors = ["Hari Haran"]
 edition = "2021"
 license = "MIT"
 
+[lib]
+name = "clean_your_tv_companion_lib"
+crate-type = ["rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
