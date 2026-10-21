@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import Personalization from './Personalization.svelte';
   import ProviderSettings from './ProviderSettings.svelte';
+  import ScheduleSettings from './ScheduleSettings.svelte';
   import OperationHistory from './OperationHistory.svelte';
   import { createConnectionController } from './connection.mjs';
   import { version as appVersion } from '../package.json';
@@ -192,7 +193,7 @@
       {:else if tab === 'history'}
         {#key selected + String(demo)}<OperationHistory serial={selected} {demo}/>{/key}
       {:else if tab === 'photos'}
-        {#key selected + String(demo)}<ProviderSettings {demo}/><Personalization serial={selected} {demo}/>{/key}
+        {#key selected + String(demo)}<ProviderSettings {demo}/><Personalization serial={selected} {demo}/><ScheduleSettings {demo}/>{/key}
       {:else if tab === 'presets'}
         <p class="eyebrow">START WITH WHAT’S ON YOUR TV</p><h1 class="page-title">A preset, with context.</h1>
         <p class="intro">Community TV reports help us find packages worth a look. Your TV’s actual apps decide what appears here.</p>

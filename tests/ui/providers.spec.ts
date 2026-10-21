@@ -37,6 +37,38 @@ test('provider collection errors preserve the draft and a dismissed key is clear
  await expect(page.getByLabel('New Unsplash Access Key',{exact:true})).toHaveValue('');
 });
 
+test('collection-only edits keep the saved key, local photos preserve configuration, and Reddit stays unavailable',async({page})=>{
+ await page.goto('/');await page.getByRole('button',{name:'Backgrounds'}).click();
+ await expect(page.getByText('Reddit is unavailable.')).toBeVisible();
+ await expect(page.getByRole('option',{name:'Reddit'})).toHaveCount(0);
+ await page.getByLabel('Wallpaper provider',{exact:true}).selectOption('unsplash');
+ await page.getByLabel('Unsplash collection IDs',{exact:true}).fill('456');
+ await page.getByRole('button',{name:'Review source changes'}).click();
+ const review=page.locator('.provider-review');
+ await expect(review).toContainText('keep');
+ await expect(review).not.toContainText('New Unsplash Access Key');
+ await expect(page.getByLabel('New Unsplash Access Key',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Dismiss source review'}).click();
+ await page.getByLabel('Wallpaper provider',{exact:true}).selectOption('local');
+ await page.getByRole('button',{name:'Review source changes'}).click();
+ await expect(page.locator('.provider-review')).toContainText('local');
+ await expect(page.locator('.provider-review')).toContainText('keep');
+ await page.getByRole('button',{name:'Dismiss source review'}).click();
+ await page.getByLabel('Wallpaper provider',{exact:true}).selectOption('unsplash');
+ await page.getByLabel('Saved Unsplash Access Key',{exact:true}).selectOption('remove');
+ await page.getByRole('button',{name:'Review source changes'}).click();
+ await expect(page.getByRole('alert').filter({hasText:'Switch to Local photos before removing'})).toBeVisible();
+});
+
+test('provider status separates saved configuration from the retrieval check',async({page})=>{
+ await page.goto('/');await page.getByRole('button',{name:'Backgrounds'}).click();
+ const status=page.locator('.safe-status');
+ await expect(status).toContainText('Current source');
+ await expect(status).toContainText('Local photos');
+ await expect(status).toContainText('Saved · value never read back');
+ await expect(status).toContainText('Not checked');
+});
+
 test('native provider configuration has no credential input or apply without a verified bridge',async({page})=>{
  await page.addInitScript(()=>{
   (window as any).__TAURI_INTERNALS__={invoke:async(command:string)=>{

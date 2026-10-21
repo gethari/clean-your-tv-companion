@@ -107,6 +107,18 @@ values and a fresh expected_revision. It never resets all settings or overwrites
 The TV retains previous referenced assets until the companion explicitly releases its rollback manifest;
 insufficient space to retain them blocks activation. APK/data downgrades are outside the protocol.
 
+## Capability fallback verification
+
+`tests/fixtures/launcher-protocol/capabilities.json` covers a supported launcher, the legacy 2.4 shape,
+a newer protocol, a missing mandatory feature and invalid storage limits. The Rust fixture test
+`launcher_protocol::tests::fixture_capabilities_fail_closed_for_legacy_newer_and_incomplete_versions`
+confirms that every unsupported shape is read-only. The browser test
+`tests/ui/personalization.spec.ts` (“unsupported launcher remains read-only…”) confirms the UI shows the
+inspection reason and exposes no Apply or Restore action. A compatible launcher must advertise protocol
+version 1 with all four mandatory personalization features; version names, provider presence or partial
+features never enable editing. The exact baseline path is shown in each review, and restore limits are
+listed below.
+
 ## Error codes and verification
 
 Stable error codes: `unsupported_protocol`, `unsupported_feature`, `invalid_request`, `access_denied`,

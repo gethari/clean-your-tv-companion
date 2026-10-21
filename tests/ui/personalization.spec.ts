@@ -22,6 +22,30 @@ test('demo photo draft supports keyboard interval validation and explicit review
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
 });
 
+test('collection editing previews dimming, supports keyboard removal and keeps playback controls independent',async({page})=>{
+ await page.goto('/');
+ await page.getByRole('button',{name:/Backgrounds/i}).click();
+ await page.getByRole('button',{name:'Add sample photo'}).click();
+ const dim=page.getByLabel(/Background dimming/);
+ await dim.focus();
+ await dim.fill('40');
+ await expect(page.locator('.dim-overlay')).toHaveCSS('background-color','rgba(0, 0, 0, 0.4)');
+ await page.getByRole('button',{name:'30 min'}).click();
+ await expect(page.getByLabel('Change photo every')).toHaveValue('30');
+ await page.getByLabel('Photo order').selectOption('shuffle');
+ await expect(page.getByText(/shuffled/)).toBeVisible();
+ const preview=page.getByRole('button',{name:'Preview photo 1'});
+ await preview.focus();
+ await page.keyboard.press('Enter');
+ await expect(preview).toHaveAttribute('aria-pressed','true');
+ const remove=page.getByRole('button',{name:'Remove photo 1'});
+ await remove.focus();
+ await page.keyboard.press('Enter');
+ await expect(page.getByRole('button',{name:'Preview photo 1'})).toHaveCount(0);
+ await expect(page.getByLabel('Collection to use')).toHaveValue('d'.repeat(32));
+ expect(await page.evaluate(()=>'__TAURI_INTERNALS__' in window)).toBe(false);
+});
+
 test('unsupported launcher remains read-only with no apply action',async({page})=>{
  await page.addInitScript(()=>{
   const state={settings:{},overrides:{},collections:[],revision:'f'.repeat(64)};
@@ -94,6 +118,16 @@ test('native mixed import shows individual rejection, preserves review on unknow
  const manifest=(await page.evaluate(()=>(window as any).__TEST_CALLS__.find((call:any)=>call.command==='prepare_personalization').args.collections[0]));
  expect(manifest.order).toBe('shuffle');
  expect(manifest.interval_minutes).toBe(17);
+});
+
+test('local photo import works while online providers stay unavailable',async({page})=>{
+ await page.goto('/');
+ await page.getByRole('button',{name:/Backgrounds/i}).click();
+ await expect(page.getByText('Reddit is unavailable.')).toBeVisible();
+ await expect(page.getByLabel('New Unsplash Access Key',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Add sample photo'}).click();
+ await expect(page.getByRole('button',{name:'Preview photo 1'})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Review changes'})).toBeEnabled();
 });
 
 test('two import batches deduplicate by content and enforce the aggregate collection quota',async({page})=>{

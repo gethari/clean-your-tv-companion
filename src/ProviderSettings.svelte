@@ -15,6 +15,7 @@
   let notice = $state('');
   let support = $derived(providerCapabilities(demo ? demoCaps : {}));
   let status = $derived(safeProviderStatus(demo ? observed : {}));
+  let providerLabel = $derived(PROVIDER_CHOICES.find(item => item.id === status.provider)?.label ?? 'Unknown');
   function prepare() {
     const result=reviewProviderDraft({provider,collectionIds,credentialAction,accessKey},observed,demoCaps);
     errors=result.errors;
@@ -35,9 +36,12 @@
   <p class="eyebrow">WALLPAPER SOURCE</p><h2 id="provider-title">Choose where photos come from</h2>
   {#if !support.editable}
     <p class="availability" role="status">Provider configuration needs a compatible upstream launcher with a verified private settings interface. Existing provider settings stay on the TV. Local photo editing is available when the launcher supports it.</p>
-    <p>The MVP includes Unsplash Access Key and collection settings. This build cannot safely apply them to the current upstream release yet.</p>
+    <p>The MVP includes Unsplash Access Key and collection settings. This build cannot safely read or apply them to the current upstream release yet, so no source editor is shown.</p>
+    <p class="safe-status"><strong>Current source:</strong> cannot be read safely over this launcher interface. <strong>Retrieval check:</strong> not performed. Nothing is changed.</p>
+    <p><strong>Reddit is unavailable.</strong> No API approval or permitted offline-retention decision exists for this app. Local photos work without Reddit, Unsplash or any account.</p>
   {:else}
     <p>Demo · configure an example source. Your Access Key stays in this form’s memory and is never sent.</p>
+    <p><strong>Reddit is unavailable.</strong> No API approval or permitted offline-retention decision exists for this app. This demo configures only Local photos, Unsplash and Automatic.</p>
     <fieldset disabled={!!review}>
       <label for="wallpaper-provider">Wallpaper provider</label>
       <select id="wallpaper-provider" bind:value={provider}>{#each PROVIDER_CHOICES as item}<option value={item.id}>{item.label}</option>{/each}</select>
@@ -50,7 +54,7 @@
       {#if credentialAction==='replace'}<label for="unsplash-access-key">New Unsplash Access Key</label><input id="unsplash-access-key" type="password" bind:value={accessKey} maxlength="200" autocomplete="off" spellcheck="false" aria-invalid={!!errors.accessKey}/><p>Use the Access Key. The Secret Key is not needed.</p>{/if}
     </fieldset>
     {#each Object.values(errors) as message}<p class="error" role="alert">{message}</p>{/each}
-    <p class="safe-status">{status.credentialPresent ? 'A key is saved on the example TV.' : 'No key is saved.'} {status.configurationSaved ? 'Configuration saved.' : ''} {status.message}</p>
+    <div class="safe-status"><h3>Saved on the example TV</h3><dl><dt>Current source</dt><dd>{providerLabel}</dd><dt>Collection IDs</dt><dd>{status.collectionIds.join(', ') || 'None reported'}</dd><dt>Access Key</dt><dd>{status.credentialPresent ? 'Saved · value never read back' : status.credentialPresent === false ? 'Not saved' : 'Unknown'}</dd><dt>Configuration</dt><dd>{status.configurationSaved ? 'Saved' : status.configurationSaved === false ? 'Not saved' : 'Unknown'}</dd><dt>Retrieval check</dt><dd>{status.health === 'unknown' ? 'Not checked' : status.message}</dd></dl></div>
     {#if !review}<button type="button" onclick={prepare}>Review source changes</button>{:else}
       <div class="provider-review"><h3>Wallpaper source review</h3><dl><dt>Provider</dt><dd>{review.provider}</dd><dt>Collection IDs</dt><dd>{review.collectionIds.join(', ')||'None'}</dd><dt>Saved key</dt><dd>{review.credentialAction}</dd></dl><p>The key value is excluded from this review.</p><button type="button" onclick={applyDemo}>Apply demo source</button><button type="button" class="secondary" onclick={dismiss}>Dismiss source review</button></div>
     {/if}
@@ -59,5 +63,5 @@
 </section>
 
 <style>
-.provider-panel{padding:24px;border:1px solid #d9e4df;border-radius:18px;background:#fff;margin:20px 0;color:#183535}.eyebrow{font-size:11px;letter-spacing:.12em;color:#57817a;font-weight:700}h2{margin:8px 0 12px}p{font-size:13px;line-height:1.6;color:#617573}fieldset{border:0;padding:0;max-width:640px;min-width:0}label{display:block;font-weight:650;font-size:13px;margin:16px 0 7px}input,textarea,select{width:100%;box-sizing:border-box;padding:11px;border:1px solid #bdcec5;border-radius:9px;font:inherit;font-size:14px}button{border:1px solid #276b60;background:#276b60;color:white;border-radius:9px;padding:11px 15px;cursor:pointer;margin:8px 8px 0 0;font:inherit;font-size:13px}.secondary{background:white;color:#276b60}.availability{padding:14px;background:#edf5f0;border-radius:10px}.error{color:#8d3324}.provider-review{padding:16px;border:1px solid #bdcec5;border-radius:10px}.provider-review dt{font-weight:700;font-size:13px}.provider-review dd{margin:4px 0 14px;overflow-wrap:anywhere;font-size:13px}.safe-status{padding:10px 0}input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-visible{outline:3px solid #a6c9b8;outline-offset:3px}
+.provider-panel{padding:24px;border:1px solid #d9e4df;border-radius:18px;background:#fff;margin:20px 0;color:#183535}.eyebrow{font-size:11px;letter-spacing:.12em;color:#57817a;font-weight:700}h2{margin:8px 0 12px}p{font-size:13px;line-height:1.6;color:#617573}fieldset{border:0;padding:0;max-width:640px;min-width:0}label{display:block;font-weight:650;font-size:13px;margin:16px 0 7px}input,textarea,select{width:100%;box-sizing:border-box;padding:11px;border:1px solid #bdcec5;border-radius:9px;font:inherit;font-size:14px}button{border:1px solid #276b60;background:#276b60;color:white;border-radius:9px;padding:11px 15px;cursor:pointer;margin:8px 8px 0 0;font:inherit;font-size:13px}.secondary{background:white;color:#276b60}.availability{padding:14px;background:#edf5f0;border-radius:10px}.error{color:#8d3324}.provider-review{padding:16px;border:1px solid #bdcec5;border-radius:10px}.provider-review dt{font-weight:700;font-size:13px}.provider-review dd{margin:4px 0 14px;overflow-wrap:anywhere;font-size:13px}.safe-status{padding:10px 0}.safe-status h3{font-size:14px;margin:8px 0}.safe-status dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:0;font-size:13px}.safe-status dt{font-weight:650}.safe-status dd{margin:0;overflow-wrap:anywhere;color:#617573}input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-visible{outline:3px solid #a6c9b8;outline-offset:3px}
 </style>

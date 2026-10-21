@@ -20,7 +20,7 @@
 ## 4. Upstream wallpaper provider configuration
 
 - [x] 4.1 Add capability-driven provider/configuration and safe-status types with upstream collection-ID normalization; verify existing-key keep, replace/remove intent, malformed/duplicate IDs and supported-source selection with fixtures.
-- [ ] 4.2 Add source selector and masked Unsplash Access Key/collection editor with explicit review, distinct validation/persistence/fetch outcomes and no secret persistence; verify offline mocked UI tests and document configuration semantics.
+- [x] 4.2 Add source selector and masked Unsplash Access Key/collection editor with explicit review, distinct validation/persistence/fetch outcomes and no secret persistence; verify offline mocked UI tests and document configuration semantics.
 - [ ] 4.3 Integrate a verified upstream private credential/configuration bridge with atomic activation and opaque rollback references; verify argument/log/export redaction, interrupted key update, removal and restoration without shared-storage secret staging. Block this task if that upstream interface is absent.
 - [ ] 4.4 Verify upstream-driven retrieval attribution, fallback, offline/rate-limit behavior and continued playback with companion closed on the pinned compatible launcher; physical testing requires the user's restriction to be lifted.
 

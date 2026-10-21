@@ -104,11 +104,15 @@ and retrieval status, and reviewed writes. Configure the launcher's existing pro
 another retrieval service. Credentials must use a verified private bridge and remain absent from ordinary
 journals, logs and exports. A provider merge alone does not prove that this bridge or a signed downloadable
 APK exists. Missing external integration is reported as a blocked feature, not a fake connected source.
+Local photo import requires no account, provider credential or network; an unavailable Unsplash or Reddit
+source never disables local collections and never replaces a usable background.
 
 Windows 11 x64 and Ubuntu 24.04 x64 require packaged hands-on acceptance. macOS is experimental until
 separately verified. Cleanup requires approved exact model/firmware evidence for TCL; other TVs retain
 capability-supported setup and inspection. All cleanup choices start off and essential functions stay.
-Schedules, Google Photos, new providers, mobile, DNS, screensavers and remote remapping are deferred.
+Schedules, Google Photos, new providers, mobile, DNS, screensavers and remote remapping are deferred as
+MVP delivery. A local, preview-only schedule editor retained from the predecessor change validates rules
+and shows upcoming transitions but advertises no launcher capability and writes nothing to a TV.
 
 No live TV testing or native companion launches are permitted until the user explicitly lifts the
 current restriction. Automated/mock checks do not satisfy physical acceptance. Launcher runtime work

@@ -60,6 +60,12 @@ Each entry shows the package name, what it does, what you might lose by turning 
 
 Two TVs from the same brand can ship with different software. These lists help you review what’s installed; they aren’t a claim that every model has been tested. Core remote, input, network, accessibility and update services are kept. Packages that bundle casting or voice features need a separate review. [Read the preset sources and rules](docs/PRESETS.md).
 
+## Photos and online sources
+
+Local photo collections need no account, API key or Internet connection. The app copies the photos you choose into its local cache and sends them to the TV only after a reviewed change; it does not watch or upload the original folder.
+
+Online sources are optional. The current build does not enable Unsplash or Reddit retrieval: Reddit has no API approval or permitted offline-retention decision, and native Unsplash configuration needs a compatible launcher with a verified private settings bridge. An unavailable online source never blocks local photo editing, and a failed provider check never replaces the background that already works. See [provider configuration](docs/PROVIDER_CONFIGURATION.md) and the [access decision](docs/PROVIDER_ACCESS.md).
+
 ## When the connection drops
 
 Keep the TV awake and check the address on its Wireless debugging screen. You can reconnect without repeating setup. Pair again only if the computer’s authorization was removed.

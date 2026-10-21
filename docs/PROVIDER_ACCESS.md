@@ -22,6 +22,18 @@ integration is established merely by adding the companion form.
 | Unsplash | Unavailable for TV-copied/offline wallpaper collections pending written clarification/approval. | Establish approved API access for this app and confirm in writing that API images may be copied to the TV, retained for offline rotation, and served from TV storage while meeting Unsplash hotlinking and interaction tracking rules. |
 | Reddit | Unavailable. No scraping, unauthenticated JSON, or fallback image extraction. | Obtain explicit API access approval for this exact use case, plus written approval for commercial use if applicable. Obtain a permitted-use/retention decision for copying user-submitted images to the TV and retaining them offline. |
 
+## Current shipped state
+
+The desktop app does not ship a separate Unsplash or Reddit retrieval adapter. Local photo import works
+without an account, credential or network. Unsplash is represented only by the guarded upstream
+configuration form: it is editable in the labeled demo, and native mode stays read-only until the launcher
+exposes a verified private credential/configuration bridge (see UPSTREAM_SUPPORT.md). No collection
+preview, attribution metadata or download-event reporting is claimed because no adapter fetches images.
+Offline, rate-limit, empty, invalid-credential and inaccessible-collection outcomes are represented as
+distinct safe statuses and tested in `tests/provider-configuration.test.mjs`; a failed optional provider
+is prevented from replacing local media by `tests/providers.test.mjs`. Reddit has no control at all and is
+shown as explicitly unavailable. These unavailable states are deliberate until the gates above are met.
+
 ## Unsplash
 
 Unsplash API Guidelines require apps to use the API-returned `photo.urls` image URLs directly (hotlinking), including when displaying images. An image selection or a similar event such as setting an image as a background is a “download” event and requires a call to the API-provided `photo.links.download_location`. The endpoint is event tracking; it is not the image URL. Attribution must identify Unsplash and the photographer and link to the photographer’s Unsplash profile. See [Unsplash API Guidelines](https://help.unsplash.com/en/articles/2511245-unsplash-api-guidelines), [API documentation](https://unsplash.com/documentation), and [API Terms](https://unsplash.com/api-terms).

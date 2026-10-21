@@ -15,14 +15,17 @@ The no-live-TV restriction still applies. Follow the new tasks for current compl
 
 ## MVP implementation checkpoint
 
-Current progress is **11/18**. See [MVP_STATUS.md](docs/MVP_STATUS.md) for completed work, all remaining
-external/integration gates, and final verification (61 Rust tests, 26 mocked browser tests, and an
-offline Linux deb build). No new native app, provider or TV test was performed.
+Current progress is **12/18**. See [MVP_STATUS.md](docs/MVP_STATUS.md) for completed work, all remaining
+external/integration gates, and final verification (61 Rust tests, 35 JavaScript tests, 32 mocked browser
+tests, and an offline Linux deb build). No new native app, provider or TV test was performed.
 
 Completed companion work now includes local editor correctness and focused tests, bounded identity-scoped
 background-operation history with explicit reconcile/restore, a secret-free upstream provider draft/status
-model and demo-only source editor, a fake-tested typed setup-operation kernel, and a deny-by-default cleanup
-policy. Native provider configuration remains disabled: do not collect keys without a verified bridge.
+model and demo-only source editor with separate saved-vs-retrieval status, a fake-tested typed
+setup-operation kernel, and a deny-by-default cleanup policy. Native provider configuration remains
+disabled: do not collect keys without a verified bridge. The predecessor change also gained a local
+schedule validator/editor and deterministic preview (22/29 checked); it writes nothing to a TV and is not
+MVP schedule delivery.
 The live installation/HOME/cleanup adapters are not wired and no cleanup profile is approved. Background
 history currently covers v1 personalization; typed setup v2 records live separately pending live integration.
 
@@ -34,7 +37,8 @@ experimental launcher branch without a new explicit integration decision.
 
 ## Resume here
 
-The user requested a checkpoint, conventional commits and pushes, and this handoff in the repository. Implementation is paused at that request. Historical checkpoint for `automatic-tv-discovery-and-wallpaper-personalization`; read its [tasks](openspec/changes/automatic-tv-discovery-and-wallpaper-personalization/tasks.md), design and spec deltas before editing. Tracking currently records 14/29 tasks complete. Remaining unchecked tasks include partially implemented work; do not equate committed code with accepted features.
+The user requested a checkpoint, conventional commits and pushes, and this handoff in the repository. Implementation is paused at that request. Historical checkpoint for `automatic-tv-discovery-and-wallpaper-personalization`; read its [tasks](openspec/changes/automatic-tv-discovery-and-wallpaper-personalization/tasks.md), design and spec deltas before editing. Tracking now records 22/29 tasks complete. Remaining unchecked tasks are external launcher/TV, physical
+acceptance or secure-bridge work; do not equate committed code with accepted features.
 
 **Do not contact or test the real TV. Someone is watching it.** This restriction persists until the user explicitly lifts it. Do not launch the native companion (it automatically discovers/reconnects), run ADB, install APKs, query TV state, change Home, take TV screenshots, or run the live smoke scripts in `/tmp`. The owned native test process was terminated. Mocked browser tests, Rust unit tests and offline launcher Gradle tests are permitted.
 
@@ -85,7 +89,15 @@ Cargo home/toolchain and Gradle daemon local sockets may require sandbox escalat
 - `tauri-v2` / `tauri-security` — native picker/event/IPC review as needed.
 - `openspec-archive-change` — only once all required implementation and acceptance work is actually complete.
 
-## Checkpoint results
+## Checkpoint results — latest apply run
+
+- `pnpm check`: 0 errors/warnings.
+- `pnpm test`: 35 passed.
+- `pnpm exec playwright test`: 32 passed.
+- Rust: 61 passed, 1 ignored subprocess helper invoked by its parent test.
+- `openspec validate` still required before archiving; no native app, TV, ADB or provider network call was used.
+
+## Earlier checkpoint results
 
 - Rust: 34 passed, 0 failed; one explicitly invoked subprocess helper marked ignored.
 - JavaScript unit tests: 21 passed.

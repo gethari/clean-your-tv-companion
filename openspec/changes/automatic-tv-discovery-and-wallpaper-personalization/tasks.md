@@ -15,31 +15,31 @@
 - [x] 2.3 Deliver the launcher-side contract in its maintained project and record release evidence here; verify contract integration against an installed compatible launcher. This external dependency blocks wallpaper-write completion.
 - [x] 2.4 Implement identity-bound plans, durable baseline/journal and per-device locking for personalization; verify no-op, stale revision, process interruption and concurrent apply tests.
 - [x] 2.5 Implement staged transfer/activation and conflict-aware restore; inject disconnects before and after activation and verify reconciliation never claims unobserved success or overwrites later manual changes.
-- [ ] 2.6 Document protocol capability fallback, baseline location, restore limits and compatible launcher requirement; verify unsupported versions expose inspection with no editing action.
+- [x] 2.6 Document protocol capability fallback, baseline location, restore limits and compatible launcher requirement; verify unsupported versions expose inspection with no editing action.
 
 ## 3. Local wallpaper collections
 
 - [x] 3.1 Add scoped native pickers/drop handles and bounded JPEG/PNG/WebP decoding; test corrupt content, unsupported files, oversized dimensions and folder symlink escape without broad filesystem permissions.
-- [ ] 3.2 Add thumbnails, deduplication, crop/dimming preview and collection editing; verify mixed imports preserve accepted images and all actions work with keyboard input.
-- [ ] 3.3 Transfer manifests/assets with hash verification and storage preflight; test interrupted transfer, retry, cancellation and insufficient storage preserve the active collection.
+- [x] 3.2 Add thumbnails, deduplication, crop/dimming preview and collection editing; verify mixed imports preserve accepted images and all actions work with keyboard input.
+- [x] 3.3 Transfer manifests/assets with hash verification and storage preflight; test interrupted transfer, retry, cancellation and insufficient storage preserve the active collection.
 - [ ] 3.4 Deliver TV-owned sequential/shuffle playback and interval persistence in the compatible launcher; verify 5/15/30/custom intervals, invalid inputs, single-image collections and restart behavior using controlled-clock tests and real-device evidence.
 - [ ] 3.5 Document one-time folder copying, supported formats, limits and launcher-only display; verify preview crop/dimming against an actual TV screenshot.
 
 ## 4. Scheduled themes
 
-- [ ] 4.1 Add schedule editing with default theme, fixed-time/solar rules, explicit location/timezone, priority and fallback; verify upcoming-transition previews and invalid/duplicate-boundary feedback.
+- [x] 4.1 Add schedule editing with default theme, fixed-time/solar rules, explicit location/timezone, priority and fallback; verify upcoming-transition previews and invalid/duplicate-boundary feedback.
 - [ ] 4.2 Deliver TV-side local solar/timezone evaluation and saved schedules through the versioned contract; test polar dates, DST gaps/repeats, coincident rules, midnight, timezone changes and manual override expiry.
 - [ ] 4.3 Verify wake/reboot reconciliation and independent rotation on a real compatible TV with the laptop closed and network unavailable; record results and confirm missed transitions are not replayed.
-- [ ] 4.4 Document solar fallback, timezone behavior and offline operation; verify examples correspond to scheduler fixtures.
+- [x] 4.4 Document solar fallback, timezone behavior and offline operation; verify examples correspond to scheduler fixtures.
 
 ## 5. Optional online providers and Google Photos investigation
 
 - [x] 5.1 Record a current access, attribution, hotlinking, caching/retention, download-event and credential-handling decision for Unsplash and Reddit; verify each decision against official documentation and approved access before enabling its adapter.
 - [ ] 5.2 Add the provider source/status contract and secure credential handling through narrowly scoped IPC and TV storage; verify logs/exports exclude secrets and revocation clears credentials.
-- [ ] 5.3 Implement an approved Unsplash adapter or retain an explicit unavailable state when access/terms gates fail; verify collection preview, attribution, event reporting and offline/rate-limit fallback against the recorded decision.
-- [ ] 5.4 Implement an approved Reddit adapter or retain an explicit unavailable state when approval is absent; verify configured community selection, pagination, media filtering and authentication/rate-limit recovery using approved access or fixtures.
+- [x] 5.3 Implement an approved Unsplash adapter or retain an explicit unavailable state when access/terms gates fail; verify collection preview, attribution, event reporting and offline/rate-limit fallback against the recorded decision.
+- [x] 5.4 Implement an approved Reddit adapter or retain an explicit unavailable state when approval is absent; verify configured community selection, pagination, media filtering and authentication/rate-limit recovery using approved access or fixtures.
 - [x] 5.5 Deliver a Google Photos feasibility report covering Picker import, Ambient partner access, login requirements, retention and launcher-background eligibility; verify official sources and record a supported follow-up recommendation without shipping a speculative connect control.
-- [ ] 5.6 Update privacy/product copy for optional online sources; verify local import works without an app account or provider credentials and unavailable providers never block it.
+- [x] 5.6 Update privacy/product copy for optional online sources; verify local import works without an app account or provider credentials and unavailable providers never block it.
 
 ## 6. Integrated desktop acceptance
 
