@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Personalization from './Personalization.svelte';
+  import ProviderSettings from './ProviderSettings.svelte';
+  import OperationHistory from './OperationHistory.svelte';
   import { createConnectionController } from './connection.mjs';
   import { version as appVersion } from '../package.json';
   import { presets, presetRows, presetEvidence, keptFeatures, suggestedPreset } from './presets.mjs';
@@ -150,13 +152,14 @@
       <button class:current={tab === 'connect'} onclick={() => tab = 'connect'}><span>⌁</span> Connect a TV</button>
       <button class:current={tab === 'presets'} onclick={() => tab = 'presets'}><span>▤</span> TV presets</button>
       <button class:current={tab === 'photos'} disabled={!demo && !selected} onclick={() => tab = 'photos'}><span>▧</span> Backgrounds</button>
+      <button class:current={tab === 'history'} disabled={!demo && !selected} onclick={() => tab = 'history'}><span>↶</span> Operation history</button>
       <button class:current={tab === 'scope'} onclick={() => tab = 'scope'}><span>✦</span> What’s coming</button>
     </nav>
     <div class="rail-note"><span class="privacy-dot"></span> Local photos, your TV.<p>No account. No subscription.<br/>Just you and your TV.</p></div>
     <div class="version">COMPANION <span>{appVersion} · inspection preview</span></div>
   </aside>
   <main id="main">
-    <header><div class="breadcrumb">Your space <span>/</span> {tab === 'connect' ? 'Connect a TV' : tab === 'scope' ? 'Project scope' : tab === 'presets' ? 'TV presets' : tab === 'photos' ? 'Launcher backgrounds' : 'Overview'}</div><span class="mode">{demo ? '◌ Demo · no TV connected' : selected ? '● Live inspection' : '◌ Ready to connect'}</span></header>
+    <header><div class="breadcrumb">Your space <span>/</span> {tab === 'connect' ? 'Connect a TV' : tab === 'scope' ? 'Project scope' : tab === 'presets' ? 'TV presets' : tab === 'photos' ? 'Launcher backgrounds' : tab === 'history' ? 'Operation history' : 'Overview'}</div><span class="mode">{demo ? '◌ Demo · no TV connected' : selected ? '● Live inspection' : '◌ Ready to connect'}</span></header>
     <div class="content">
       <div class="feedback top-feedback" aria-live="polite">
         {#if busy}<p class="notice"><span class="spinner" aria-hidden="true"></span>{busy}{#if phase === 'searching'}<button class="text-button" onclick={cancelSearch}>Stop search</button>{/if}</p>{/if}
@@ -186,8 +189,10 @@
         {#if pairing}<section class="panel pairing"><h2>Pair your computer</h2><p>On the TV: Wireless debugging → Pair device with pairing code. This address is usually different from the connection address.</p><form onsubmit={(e) => {e.preventDefault(); pair();}}><div><label for="pair-address">Pairing address</label><input id="pair-address" bind:value={pairEndpoint} placeholder="192.168.1.50:39123" autocomplete="off" disabled={!!busy || demo}/></div><div><label for="code">Six-digit pairing code</label><input id="code" aria-invalid={!!error && !/^\d{6}$/.test(code)} bind:value={code} inputmode="numeric" maxlength="6" type="password" autocomplete="off" disabled={!!busy || demo}/></div><button class="primary" disabled={!!busy || demo}>{busy ? 'Pairing…' : 'Pair computer'}</button></form></section>{/if}
         <section class="help"><button class="text-button" onclick={() => help = !help} aria-expanded={help}> {help ? '−' : '+'} Where do I find Wireless debugging?</button>{#if help}<ol><li>On the TV, open Settings → About. Select Build seven times to enable developer options. Menu names vary by brand.</li><li>Open Developer options → Wireless debugging and switch it on. Keep this screen open.</li><li>Pair this computer if needed, then use the connection address from the main debugging screen. Accept authorization on the TV.</li><li>If the TV sleeps or reconnects to Wi-Fi, the port may change. Enter the new one. Guest networks or VPNs may prevent discovery.</li></ol><p>Some older TVs only offer legacy network debugging. That guided path is planned. This preview accepts private IPv4 addresses only. Disable debugging on the TV after finishing if you don’t need it.</p>{/if}</section>
         {#if demo}<p class="notice">Connection controls work in the desktop app. This demo doesn’t discover or change devices.</p>{/if}
+      {:else if tab === 'history'}
+        {#key selected + String(demo)}<OperationHistory serial={selected} {demo}/>{/key}
       {:else if tab === 'photos'}
-        {#key selected + String(demo)}<Personalization serial={selected} {demo}/>{/key}
+        {#key selected + String(demo)}<ProviderSettings {demo}/><Personalization serial={selected} {demo}/>{/key}
       {:else if tab === 'presets'}
         <p class="eyebrow">START WITH WHAT’S ON YOUR TV</p><h1 class="page-title">A preset, with context.</h1>
         <p class="intro">Community TV reports help us find packages worth a look. Your TV’s actual apps decide what appears here.</p>

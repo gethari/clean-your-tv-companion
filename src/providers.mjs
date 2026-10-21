@@ -1,3 +1,4 @@
+// Legacy separate-adapter status model. MVP upstream configuration uses provider-configuration.mjs.
 const freeze = (value) => Object.freeze(value);
 
 export const SOURCE_STATES = freeze([

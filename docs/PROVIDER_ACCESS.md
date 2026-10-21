@@ -5,6 +5,16 @@
 
 This is a provider gate assessment, not evidence of API access. No approved Unsplash or Reddit credentials, provider agreement, or app approval are established in this repository. Do not enable either adapter until the applicable approval and product-use questions below are resolved. The planned local import path is independent of these provider gates.
 
+## MVP configuration boundary
+
+This report assessed building separate API download/offline-copy adapters. The active
+`companion-full-setup-mvp` instead requires configuring existing upstream launcher providers with
+a user-supplied Access Key and collection IDs. See PROVIDER_CONFIGURATION.md and UPSTREAM_SUPPORT.md.
+Do not use this historical adapter assessment alone to disable a verified upstream configuration
+integration. That integration still needs a supported private credential interface and must follow
+the upstream provider's actual access/display/retention requirements. No approval or working live
+integration is established merely by adding the companion form.
+
 ## Decision
 
 | Provider | Current decision | Gate before enabling |
