@@ -1,0 +1,11 @@
+# Typed setup operation journal
+
+The setup operation kernel stores schema version 2 plans in the `setup_plans` directory below the local operations root. It leaves existing version 1 personalization records in `plans` untouched and uses the same per-device lock file. Each plan binds an exact identity snapshot, expected state revision, a typed operation, its captured before/after state, creation time, phase, and optional restore reference. Writes use the same private, atomic journal writer as personalization plans.
+
+The currently modeled operations are launcher installation from an opaque trusted release reference with SHA-256 and signer identity, HOME selection with known before and after components, and package enabled-state changes. Package, activity, digest, artifact-reference, and positive integer version fields are validated before storage. An existing launcher update must keep the same package and signer and cannot lower the version. Each review expires after 15 minutes. The kernel accepts no shell command, free-form path, URL, or package-manager argument vector.
+
+Applying a pending plan first checks identity, revision, and the operation-owned before-state. It durably records `intent` before asking the typed backend to mutate anything. A no-op plan is marked verified without a backend write. After an interruption, reconciliation only observes: an after-state becomes `verified`, an unchanged before-state at the reviewed revision returns to `pending`, and identity, revision, or owned-state drift becomes `conflict`. Reconciliation never retries. A retry requires the separate explicit `resume_reviewed` call, which reconciles first.
+
+The inverse planner supports only a verified HOME or package-enabled operation and only while its applied value remains unchanged. It uses the operation's own captured before-state as the restore target, preserving pre-disabled package state. Launcher installation is explicitly non-restorable; the kernel does not model an APK downgrade as cleanup.
+
+This is an offline transaction kernel with fake-backend tests. It does not register Tauri commands, implement an ADB/native adapter, identify a trusted release catalog, or authorize writes on any launcher. Production setup writes remain unavailable until a reviewed artifact and validated device/launcher profile provide a supported typed backend.

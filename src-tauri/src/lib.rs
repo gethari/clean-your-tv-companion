@@ -3,6 +3,8 @@ pub mod launcher_protocol;
 pub mod launcher_transport;
 pub mod journal;
 pub mod transaction;
+pub mod cleanup_policy;
+pub mod setup_operations;
 mod personalization;
 mod media;
 use serde_json::{json, Value};
@@ -298,7 +300,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![discover, connect_device, pair_device, inspect_device, remember_device, remembered_device, prepare_personalization, personalization::personalization_state, personalization::apply_personalization, personalization::cancel_personalization, personalization::prepare_restore, media::pick_photo_files, media::pick_photo_folder, media::transform_image])
+        .invoke_handler(tauri::generate_handler![discover, connect_device, pair_device, inspect_device, remember_device, remembered_device, prepare_personalization, personalization::list_personalization_history, personalization::reconcile_personalization, personalization::personalization_state, personalization::apply_personalization, personalization::cancel_personalization, personalization::prepare_restore, media::pick_photo_files, media::pick_photo_folder, media::transform_image])
         .run(tauri::generate_context!()).expect("Could not start Clean Your TV");
 }
 #[cfg(test)]

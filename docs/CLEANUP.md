@@ -1,0 +1,13 @@
+# Optional package cleanup policy
+
+Cleanup policy is a pure planning boundary. It does not execute package operations or expose a device command. The shipped firmware-profile catalog is deliberately empty, so every device remains inspection-only for cleanup until a profile has physical verification evidence and has been reviewed and approved.
+
+A profile matches only an exact manufacturer, model, and complete firmware fingerprint. Its version, provenance, firmware version, explicit package allowlist, protected package groups, and verification evidence are validated before it can create a plan. Evidence must identify the same fingerprint and firmware, name a test run and reviewer, and cover stock HOME, Google Play, casting, voice, input, accessibility, network, updates, setup, HDMI, and remote controls. Manufacturer or model similarity never grants permission.
+
+Callers must provide a fresh package observation with a known enabled state for each selected package and a non-empty successful HOME observation. Package identifiers are syntax-checked; conflicting duplicate observations and duplicate selections are rejected. Only explicitly selected, enabled, allowlisted packages can produce disable-only plan entries. Unknown or protected packages are rejected. System packages are not categorically denied by their system flag: a profile must explicitly allowlist and evidence a package before it can be disabled. Previously disabled packages are no-ops; unselected candidates are absent from the plan. The policy never emits uninstall operations.
+
+Exact protected identifiers from the comparison inventory are hard-denied even if a profile accidentally lists them. This includes the Google setup wizard, launcher/HOME packages, Play services and store, media shell, voice/remote/update/input/accessibility packages, and TCL TV/input/setup/configuration packages. The observed active HOME package list is protected independently as well.
+
+Protected dependency groups are deny-by-default. Stock HOME, Google Play, casting, voice, input, accessibility, network, updates, setup, HDMI, and remote dependencies must remain enabled. A package that bundles an optional behavior with one of these functions is excluded from cleanup.
+
+The unit tests inject a clearly synthetic profile to exercise policy branches. That fixture is not physical evidence and is not part of the built-in catalog. Physical validation of remote, HDMI, casting, voice, accessibility, network, update, setup, and restore behavior remains required before any profile can be approved. Reviewed sequential execution and restore are separate work and are not provided by this module.

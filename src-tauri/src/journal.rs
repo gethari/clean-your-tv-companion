@@ -3,8 +3,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+
+const MAX_HISTORY_RECORDS: usize = 1000;
+const MAX_HISTORY_RECORD_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +37,24 @@ pub struct Record {
     pub resulting_revision: Option<String>,
     pub restore_of: Option<String>,
     pub expires_at: u64,
+}
+
+impl Record {
+    /// Expose only the allowlisted operation metadata across the desktop command boundary.
+    pub fn safe_summary(&self) -> OperationSummary {
+        OperationSummary {
+            id: self.id.clone(),
+            phase: self.phase.clone(),
+            owned_keys: self.owned_keys.iter()
+                .filter(|key| crate::launcher_protocol::SETTING_KEYS.contains(&key.as_str()))
+                .cloned().collect(),
+            collection_count: self.collections.len(),
+            resulting_revision: self.resulting_revision.clone()
+                .filter(|revision| crate::launcher_protocol::hex_id(revision, 64)),
+            restore_of: self.restore_of.clone()
+                .filter(|id| crate::launcher_protocol::hex_id(id, 32)),
+        }
+    }
 }
 
 impl Record {
@@ -87,6 +108,25 @@ pub struct Review {
     pub baseline_location: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct OperationSummary {
+    pub id: String,
+    pub phase: Phase,
+    pub owned_keys: Vec<String>,
+    pub collection_count: usize,
+    pub resulting_revision: Option<String>,
+    pub restore_of: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OperationHistory {
+    pub operations: Vec<OperationSummary>,
+    /// Count of malformed, oversized or unreadable journal files without identifying their TV.
+    pub unreadable_records: usize,
+    /// True when the hard enumeration cap was reached; refresh later to inspect more records.
+    pub truncated: bool,
+}
+
 pub struct Journal {
     root: PathBuf,
 }
@@ -106,7 +146,7 @@ fn private_options() -> OpenOptions {
     options
 }
 
-fn private_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn private_directory(path: &Path) -> io::Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -123,7 +163,7 @@ enum WritePoint {
     Renamed,
 }
 
-fn atomic_json(
+fn atomic_json_with_checkpoint(
     path: &Path,
     data: &[u8],
     checkpoint: impl Fn(WritePoint) -> io::Result<()>,
@@ -144,6 +184,10 @@ fn atomic_json(
         let _ = fs::remove_file(temporary);
     }
     result
+}
+
+pub(crate) fn atomic_json(path: &Path, data: &[u8]) -> io::Result<()> {
+    atomic_json_with_checkpoint(path, data, |_| Ok(()))
 }
 
 pub fn device_key(identity: &Value) -> Result<String, String> {
@@ -201,7 +245,7 @@ impl Journal {
         if bytes.len() > 1024 * 1024 {
             return Err("This plan exceeds the local journal limit.".into());
         }
-        atomic_json(&path, &bytes, |_| Ok(())).map_err(|_| "Could not durably save the change journal. The TV operation was not confirmed.".to_owned())
+        atomic_json(&path, &bytes).map_err(|_| "Could not durably save the change journal. The TV operation was not confirmed.".to_owned())
     }
 
     pub fn load(&self, id: &str) -> Result<Record, String> {
@@ -215,6 +259,68 @@ impl Journal {
             return Err("This change journal version is not supported.".into());
         }
         Ok(record)
+    }
+
+    /// Enumerate bounded, safe summaries for one freshly verified identity.
+    /// No journal path, identity, patch value or collection manifest crosses this boundary.
+    pub fn history(&self, identity: &Value) -> Result<OperationHistory, String> {
+        let directory = self.root.join("plans");
+        let entries = fs::read_dir(&directory).map_err(|_| "Could not read operation history.")?;
+        let mut candidates = Vec::new();
+        let mut truncated = false;
+        let mut unreadable_records = 0;
+        let mut examined = 0;
+        for entry in entries {
+            if examined == MAX_HISTORY_RECORDS {
+                truncated = true;
+                break;
+            }
+            examined += 1;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => { unreadable_records += 1; continue; }
+            };
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                candidates.push(path);
+            }
+        }
+        candidates.sort();
+
+        let mut operations = Vec::new();
+        for path in candidates {
+            let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
+                unreadable_records += 1;
+                continue;
+            };
+            if !crate::launcher_protocol::hex_id(id, 32) {
+                unreadable_records += 1;
+                continue;
+            }
+            let result = (|| -> Result<Record, ()> {
+                let metadata = fs::symlink_metadata(&path).map_err(|_| ())?;
+                if !metadata.file_type().is_file() || metadata.len() > MAX_HISTORY_RECORD_BYTES { return Err(()); }
+                let mut bytes = Vec::new();
+                File::open(&path).map_err(|_| ())?
+                    .take(MAX_HISTORY_RECORD_BYTES + 1)
+                    .read_to_end(&mut bytes).map_err(|_| ())?;
+                if bytes.len() as u64 > MAX_HISTORY_RECORD_BYTES { return Err(()); }
+                let record: Record = serde_json::from_slice(&bytes).map_err(|_| ())?;
+                if record.schema_version != 1 || record.id != id
+                    || !crate::launcher_protocol::hex_id(&record.session_id, 32) {
+                    return Err(());
+                }
+                Ok(record)
+            })();
+            let Ok(record) = result else {
+                unreadable_records += 1;
+                continue;
+            };
+            if &record.identity != identity { continue; }
+            operations.push(record.safe_summary());
+        }
+        operations.sort_by(|left, right| right.id.cmp(&left.id));
+        Ok(OperationHistory { operations, unreadable_records, truncated })
     }
 
     pub fn prepare(
@@ -337,6 +443,81 @@ mod tests {
     }
 
     #[test]
+    fn history_is_identity_scoped_tolerates_corruption_and_exposes_only_safe_summaries() {
+        let temp = Temporary::new();
+        let journal = Journal::open(temp.0.clone()).unwrap();
+        let identity = json!({"serial":"selected-tv","user":"0"});
+        let mut record = Record {
+            schema_version: 1,
+            id: "a".repeat(32),
+            session_id: "b".repeat(32),
+            identity: identity.clone(),
+            expected_revision: "c".repeat(64),
+            previous_overrides: Map::new(),
+            owned_keys: vec!["wallpaper".into(), "provider_token".into()],
+            previous_collections: vec![],
+            patch: SettingsPatch::default(),
+            collections: vec![json!({"private_path":"/secret/private-photo.jpg"})],
+            phase: Phase::Verified,
+            resulting_revision: Some("d".repeat(64)),
+            restore_of: None,
+            expires_at: 1_800_000_000,
+        };
+        record.patch.set.insert("provider_token".into(), json!("fixture-secret"));
+        journal.save(&record).unwrap();
+
+        let mut another_tv = record.clone();
+        another_tv.id = "e".repeat(32);
+        another_tv.identity = json!({"serial":"other-tv-secret","user":"0"});
+        journal.save(&another_tv).unwrap();
+
+        fs::write(journal.path(&"f".repeat(32)).unwrap(), b"{not-json").unwrap();
+        let oversized = journal.path(&"1".repeat(32)).unwrap();
+        fs::write(&oversized, vec![b'x'; (MAX_HISTORY_RECORD_BYTES + 1) as usize]).unwrap();
+
+        let history = journal.history(&identity).unwrap();
+        assert_eq!(history.operations.len(), 1);
+        assert_eq!(history.operations[0].id, "a".repeat(32));
+        assert_eq!(history.operations[0].owned_keys, vec!["wallpaper"]);
+        assert_eq!(history.operations[0].collection_count, 1);
+        assert_eq!(history.operations[0].resulting_revision.as_deref(), Some("d".repeat(64).as_str()));
+        assert_eq!(history.unreadable_records, 2);
+        assert!(!history.truncated);
+
+        let serialized = serde_json::to_string(&history).unwrap();
+        assert!(!serialized.contains("other-tv-secret"));
+        assert!(!serialized.contains("fixture-secret"));
+        assert!(!serialized.contains("private-photo.jpg"));
+        assert!(!serialized.contains("/secret/"));
+    }
+
+    #[test]
+    fn history_enumeration_stops_at_the_hard_record_bound() {
+        let temp = Temporary::new();
+        let journal = Journal::open(temp.0.clone()).unwrap();
+        for index in 0..=MAX_HISTORY_RECORDS {
+            let id = format!("{index:032x}");
+            fs::write(journal.path(&id).unwrap(), b"{}").unwrap();
+        }
+        let history = journal.history(&json!({"serial":"none"})).unwrap();
+        assert!(history.truncated);
+        assert!(history.unreadable_records <= MAX_HISTORY_RECORDS);
+        assert!(history.operations.len() <= MAX_HISTORY_RECORDS);
+    }
+
+    #[test]
+    fn history_enumeration_bounds_all_directory_entries_not_only_json() {
+        let temp = Temporary::new();
+        let journal = Journal::open(temp.0.clone()).unwrap();
+        for index in 0..=MAX_HISTORY_RECORDS {
+            fs::write(journal.root.join("plans").join(format!("note-{index}.txt")), b"ignored").unwrap();
+        }
+        let history = journal.history(&json!({"serial":"none"})).unwrap();
+        assert!(history.truncated);
+        assert!(history.operations.is_empty());
+    }
+
+    #[test]
     fn restoration_requires_unchanged_owned_values_and_preserves_absence() {
         let temp = Temporary::new();
         let journal = Journal::open(temp.0.clone()).unwrap();
@@ -417,8 +598,8 @@ mod tests {
         for fail_at in [WritePoint::FileSynced, WritePoint::Renamed] {
             let temp = Temporary::new();
             let path = temp.0.join("record.json");
-            atomic_json(&path, br#"{"phase":"prepared"}"#, |_| Ok(())).unwrap();
-            assert!(atomic_json(&path, br#"{"phase":"activating"}"#, |point| {
+            atomic_json(&path, br#"{"phase":"prepared"}"#).unwrap();
+            assert!(atomic_json_with_checkpoint(&path, br#"{"phase":"activating"}"#, |point| {
                 if point == fail_at { Err(io::Error::other("injected interruption")) } else { Ok(()) }
             }).is_err());
             let observed: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();

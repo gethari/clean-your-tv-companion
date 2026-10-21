@@ -394,4 +394,81 @@ mod tests {
         assert!(verify_applied(&record,&state,&"b".repeat(64)).is_ok());
     }
 
+    struct TransferFake {
+        base: Fake,
+        incoming: Vec<Value>,
+        missing: BTreeSet<String>,
+        uploaded: Vec<String>,
+        fail_hash_once: Option<String>,
+        full: bool,
+        unsolicited: bool,
+    }
+    impl Backend for TransferFake {
+        async fn snapshot(&mut self) -> Result<DeviceSnapshot,String> { self.base.snapshot().await }
+        async fn stage(&mut self, session: &str, revision: &str, patch: &Value, collections: &[Value]) -> Result<(),String> {
+            if self.full { return Err("storage_full".into()); }
+            self.base.stage(session,revision,patch,collections).await?;
+            self.incoming=collections.to_vec(); Ok(())
+        }
+        async fn validate(&mut self,_: &str) -> Result<Validation,String> {
+            let mut missing:Vec<_>=self.missing.iter().cloned().collect();
+            if self.unsolicited { missing.push("f".repeat(64)); }
+            Ok(Validation {ready:missing.is_empty(),missing_assets:missing,revision:self.base.state["revision"].as_str().unwrap().into()})
+        }
+        async fn upload(&mut self,_: &str,hash: &str,_: u64) -> Result<(),String> {
+            if self.fail_hash_once.as_deref()==Some(hash) { self.fail_hash_once=None; return Err("injected transfer disconnect".into()); }
+            self.missing.remove(hash); self.uploaded.push(hash.to_owned()); Ok(())
+        }
+        async fn activate(&mut self,op: &str,session: &str,revision: &str) -> Result<String,String> {
+            let result=self.base.activate(op,session,revision).await;
+            if self.base.activated { self.base.state["collections"]=json!(self.incoming); }
+            result
+        }
+        async fn result(&mut self,op: &str) -> Result<ActivationResult,String> { self.base.result(op).await }
+        async fn discard(&mut self,session: &str) -> Result<(),String> { self.base.discard(session).await }
+    }
+    fn transfer_fixture() -> (Journal,String,TransferFake) {
+        let (journal,id,base)=fixture();
+        let mut record=journal.load(&id).unwrap();
+        record.collections=vec![json!({"id":"c".repeat(32),"order":"sequential","interval_minutes":15,"assets":[
+            {"sha256":"a".repeat(64),"bytes":100,"mime":"image/png"},
+            {"sha256":"b".repeat(64),"bytes":100,"mime":"image/png"}]})];
+        journal.save(&record).unwrap();
+        let fake=TransferFake{base,incoming:vec![],missing:BTreeSet::from(["a".repeat(64),"b".repeat(64)]),uploaded:vec![],fail_hash_once:None,full:false,unsolicited:false};
+        (journal,id,fake)
+    }
+    #[tokio::test]
+    async fn interrupted_transfer_resumes_only_missing_verified_assets() {
+        let (journal,id,mut fake)=transfer_fixture(); fake.fail_hash_once=Some("b".repeat(64));
+        let previous=fake.base.state.clone();
+        assert!(apply(&journal,&mut fake,&id,0).await.is_err());
+        assert_eq!(fake.base.state,previous); assert_eq!(fake.base.activation_calls,0);
+        assert_eq!(journal.load(&id).unwrap().phase,Phase::Staged);
+        assert_eq!(apply(&journal,&mut fake,&id,0).await.unwrap().phase,Phase::Verified);
+        assert_eq!(fake.uploaded,vec!["a".repeat(64),"b".repeat(64)]);
+        assert_eq!(fake.base.activation_calls,1);
+    }
+    #[tokio::test]
+    async fn insufficient_storage_and_cancelled_transfer_preserve_active_collection() {
+        let (journal,id,mut fake)=transfer_fixture(); let previous=fake.base.state.clone(); fake.full=true;
+        assert!(apply(&journal,&mut fake,&id,0).await.is_err());
+        assert_eq!(fake.base.state,previous); assert!(fake.uploaded.is_empty());
+        assert_eq!(journal.load(&id).unwrap().phase,Phase::Prepared);
+        fake.full=false;fake.fail_hash_once=Some("b".repeat(64));
+        assert!(apply(&journal,&mut fake,&id,0).await.is_err());
+        assert_eq!(cancel(&journal,&mut fake,&id).await.unwrap().phase,Phase::Cancelled);
+        assert_eq!(fake.base.state,previous); assert_eq!(fake.base.discarded,1);
+        assert!(apply(&journal,&mut fake,&id,0).await.is_err());
+    }
+    #[tokio::test]
+    async fn unsolicited_missing_hash_and_unverified_hash_never_activate() {
+        let (journal,id,mut fake)=transfer_fixture(); fake.unsolicited=true;
+        assert!(apply(&journal,&mut fake,&id,0).await.is_err());
+        assert!(fake.uploaded.is_empty());assert_eq!(fake.base.activation_calls,0);
+        // A hash mismatch is reported as an upload failure and remains missing, never ready.
+        fake.unsolicited=false;fake.fail_hash_once=Some("a".repeat(64));
+        assert!(apply(&journal,&mut fake,&id,0).await.is_err());
+        assert_eq!(fake.base.activation_calls,0);assert!(fake.missing.contains(&"a".repeat(64)));
+    }
+
 }

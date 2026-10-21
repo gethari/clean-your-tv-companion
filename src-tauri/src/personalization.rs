@@ -1,5 +1,5 @@
 //! Native adapter for the reviewed transaction coordinator. No arbitrary paths or shell IPC.
-use crate::{journal::{Journal, Record, Review}, launcher_protocol, launcher_transport::{self, Method}, transaction::{self, Backend, DeviceSnapshot, Validation, ActivationResult, ResultStatus}};
+use crate::{journal::{Journal, OperationHistory, OperationSummary, Record, Review}, launcher_protocol, launcher_transport::{self, Method}, transaction::{self, Backend, DeviceSnapshot, Validation, ActivationResult, ResultStatus}};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{io::Read, process::Stdio, time::Duration};
@@ -126,6 +126,47 @@ impl Backend for NativeBackend {
 fn journal(app: &tauri::AppHandle) -> Result<Journal,String> {
     Journal::open(app.path().app_data_dir().map_err(|_| "Could not locate change journal.")?.join("operations"))
 }
+
+#[tauri::command]
+pub async fn list_personalization_history(
+    app: tauri::AppHandle,
+    serial: String,
+) -> Result<OperationHistory, String> {
+    let identity = serde_json::to_value(crate::tv_identity(&app, &serial).await?)
+        .map_err(|_| "Could not verify this TV.")?;
+    let history = journal(&app)?.history(&identity)?;
+    let verified = serde_json::to_value(crate::tv_identity(&app, &serial).await?)
+        .map_err(|_| "Could not verify this TV.")?;
+    if verified != identity {
+        return Err("The TV or active user changed. Refresh before opening operation history.".into());
+    }
+    Ok(history)
+}
+
+/// Read actual operation result and TV state only. This command never reactivates an operation.
+#[tauri::command]
+pub async fn reconcile_personalization(
+    app: tauri::AppHandle,
+    serial: String,
+    id: String,
+) -> Result<OperationSummary, String> {
+    let journal = journal(&app)?;
+    let record = journal.load(&id)?;
+    let identity = serde_json::to_value(crate::tv_identity(&app, &serial).await?)
+        .map_err(|_| "Could not verify this TV.")?;
+    if identity != record.identity {
+        return Err("This operation belongs to a different TV or user. Select its verified TV to continue.".into());
+    }
+    let mut backend = NativeBackend { app: app.clone(), serial: serial.clone(), identity: record.identity.clone(), operation_id: id.clone() };
+    let reconciled = transaction::reconcile(&journal, &mut backend, &id).await?;
+    let verified = serde_json::to_value(crate::tv_identity(&app, &serial).await?)
+        .map_err(|_| "Could not verify this TV.")?;
+    if verified != record.identity {
+        return Err("The TV or active user changed while reconciling. Refresh before continuing.".into());
+    }
+    Ok(reconciled.safe_summary())
+}
+
 #[tauri::command]
 pub async fn personalization_state(app: tauri::AppHandle, serial: String) -> Result<Value,String> {
     let identity=crate::tv_identity(&app,&serial).await?;

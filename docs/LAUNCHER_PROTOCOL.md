@@ -139,3 +139,12 @@ not subsequently changed. Added immutable assets/manifests can remain on the TV;
 purge or an APK/data downgrade. Unknown and unrelated settings are preserved. Native Windows/macOS
 crash durability and physical apply/restore acceptance remain unverified; offline unit tests are not a
 substitute for those checks.
+
+## MVP transfer regression checks
+
+Offline fake-device tests now inject a disconnect after one verified asset, then confirm that resume
+sends only the remaining hash before activation. Storage rejection before staging, cancellation after
+partial transfer, an unsolicited requested hash, and a rejected/unverified asset all leave the active
+state unchanged. Cache tests independently reject altered bytes, wrong lengths and unsafe identifiers.
+These checks validate the companion coordinator; they do not establish support in an upstream launcher
+or replace a physical transfer/restore check. See UPSTREAM_SUPPORT.md for that external dependency.
