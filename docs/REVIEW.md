@@ -112,3 +112,13 @@ tests; Vite production build; launcher offline `assembleRelease testReleaseUnitT
 validation. Editor-specific browser coverage and physical acceptance remain pending. Launcher scheduling
 is committed as work in progress with `theme_schedules_v1` absent from capabilities. See the handoff
 for incomplete integration and UI review findings before enabling or releasing write features.
+
+## 2026-10-21 companion MVP checkpoint
+
+The agreed `companion-full-setup-mvp` supersedes the predecessor as the active implementation queue.
+Eleven of eighteen tasks are complete. See [MVP_STATUS.md](MVP_STATUS.md) for delivered behavior, the
+61 passing Rust tests, 26 passing mocked browser tests, frontend checks and offline Linux package build.
+The provider form is demo-only until a verified upstream private credential interface exists; install/HOME
+and cleanup kernels have no live write adapter and no approved cleanup profile is shipped. No launcher
+repository or TV was changed. External release/interface gates and physical Windows/Linux acceptance
+remain incomplete, so this checkpoint must not be described as a completed MVP release.

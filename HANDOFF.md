@@ -1,8 +1,40 @@
 # Development handoff — 2026-10-20
 
+## Active MVP update — 2026-10-21
+
+The user selected full setup, Windows + Linux acceptance, validated TCL cleanup first, and a pinned
+upstream launcher release. The new active change is `companion-full-setup-mvp`; read its proposal,
+design, specs and tasks. It includes local photos AND upstream provider switching with Unsplash
+Access Key/collection IDs. Do not resume predecessor scheduling or third-party provider implementation
+as MVP work. Preserve the historical evidence below without treating it as current acceptance.
+
+All implementation is now companion-only. Do not edit original or temporary launcher checkouts.
+Resolve the latest provider-capable upstream release and verify its actual configuration interfaces.
+The no-live-TV restriction still applies. Follow the new tasks for current completion counts and
+`docs/UPSTREAM_SUPPORT.md` for source/release/bridge evidence once the inventory is delivered.
+
+## MVP implementation checkpoint
+
+Current progress is **11/18**. See [MVP_STATUS.md](docs/MVP_STATUS.md) for completed work, all remaining
+external/integration gates, and final verification (61 Rust tests, 26 mocked browser tests, and an
+offline Linux deb build). No new native app, provider or TV test was performed.
+
+Completed companion work now includes local editor correctness and focused tests, bounded identity-scoped
+background-operation history with explicit reconcile/restore, a secret-free upstream provider draft/status
+model and demo-only source editor, a fake-tested typed setup-operation kernel, and a deny-by-default cleanup
+policy. Native provider configuration remains disabled: do not collect keys without a verified bridge.
+The live installation/HOME/cleanup adapters are not wired and no cleanup profile is approved. Background
+history currently covers v1 personalization; typed setup v2 records live separately pending live integration.
+
+Read docs/LOCAL_PHOTOS.md, docs/RECOVERY.md, docs/PROVIDER_CONFIGURATION.md, docs/SETUP_OPERATIONS.md and
+docs/CLEANUP.md for API/behavior boundaries. UI tests mock device/provider commands; no TV was used.
+The upstream evidence inventory is pinned to an inspected source/release, not a claim about a later merge.
+Recheck it when a provider-capable release/private bridge is supplied; do not substitute the owner's
+experimental launcher branch without a new explicit integration decision.
+
 ## Resume here
 
-The user requested a checkpoint, conventional commits and pushes, and this handoff in the repository. Implementation is paused at that request. Continue the OpenSpec change `automatic-tv-discovery-and-wallpaper-personalization`; read its [tasks](openspec/changes/automatic-tv-discovery-and-wallpaper-personalization/tasks.md), design and spec deltas before editing. Tracking currently records 14/29 tasks complete. Remaining unchecked tasks include partially implemented work; do not equate committed code with accepted features.
+The user requested a checkpoint, conventional commits and pushes, and this handoff in the repository. Implementation is paused at that request. Historical checkpoint for `automatic-tv-discovery-and-wallpaper-personalization`; read its [tasks](openspec/changes/automatic-tv-discovery-and-wallpaper-personalization/tasks.md), design and spec deltas before editing. Tracking currently records 14/29 tasks complete. Remaining unchecked tasks include partially implemented work; do not equate committed code with accepted features.
 
 **Do not contact or test the real TV. Someone is watching it.** This restriction persists until the user explicitly lifts it. Do not launch the native companion (it automatically discovers/reconnects), run ADB, install APKs, query TV state, change Home, take TV screenshots, or run the live smoke scripts in `/tmp`. The owned native test process was terminated. Mocked browser tests, Rust unit tests and offline launcher Gradle tests are permitted.
 
