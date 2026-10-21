@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-21",
+  "upstream": {
+    "repository": "https://github.com/Gathin23/cleanyourtv",
+    "branch": "main",
+    "commit": "9071ec8d2f41826778f6b4c7f5f42dadc22f5b22",
+    "tree": "f49d596674bc42ffc568d0369d0cb3453af0c242",
+    "tag": "v2.5.0",
+    "tagObject": "49c98c50f8e6d746e373bb14ac10b1bed1489214",
+    "releasePublishedAt": "2026-10-21T04:15:52Z",
+    "releaseAssets": [],
+    "releaseNotes": "No binaries; build with launcher/build-and-install.sh.",
+    "sourceFiles": {
+      "AndroidManifest.xml": "1f96dd06626e12becaf5cb29c38fe0e46f27768b",
+      "Config.java": "8f41173e3ba76c6ad2b366a9919457fe6adee98d",
+      "ThemeProvider.java": "183f9c18bd1296ff079a73ef7fceb5091b41de55",
+      "WallpaperPlayer.java": "7292276c6a1dbcd97ba02e5029bb13fe686cda41",
+      "WallpaperRotation.java": "f1e7e553b9bfaec92b894f3f3880639e952e08da",
+      "build.gradle": "ac04c5268a6cf77c02afb04d586467c05be2a5e1"
+    },
+    "observedCapabilities": [
+      "Local wallpaper selection and display",
+      "Local wallpaper rotation and dim setting",
+      "Exported theme-file ContentProvider guarded by WRITE_SECURE_SETTINGS"
+    ],
+    "missingCapabilities": [
+      "Remote Unsplash provider in upstream main",
+      "Provider capability/status readback protocol",
+      "Private credential transaction/readback boundary"
+    ],
+    "artifactAndTrust": {
+      "officialApk": false,
+      "publishedSigningFingerprint": false,
+      "releaseBuildSigningConfig": "debug"
+    }
+  },
+  "unsplashForkCandidate": {
+    "repository": "https://github.com/gethari/cleanyourtv",
+    "branch": "feat/unsplash-wallpaper-provider",
+    "commit": "716d8052cc9b832011ad5104abbf4347fda300a1",
+    "upstreamComparison": {
+      "status": "diverged",
+      "aheadBy": 1,
+      "behindBy": 322
+    },
+    "files": {
+      "UnsplashWallpaper.java": "76e678f46b466c05ab6e48ace43aa13fe0abd00c",
+      "WallpaperProvider.java": "8631c3735c442a258e99d65cf8a406e8d4d81b1e",
+      "WallpaperProviders.java": "f026e18f9f39c87bbfa4c24a68ac8cefb4aa1795",
+      "tools/unsplash-setup.py": "1f5f44c2881d443a9fa836177e3f523f634eb64e",
+      "WallpaperProvidersTest.java": "f49565092b0914ebae3dc26c7503f609e6f2d416"
+    },
+    "upstreamMerged": false,
+    "providerEnabled": false
+  },
+  "companionIntegration": {
+    "baselineDecision": "local-wallpaper-only",
+    "remoteProviderStatus": "unavailable",
+    "credentialBridgeEstablished": false,
+    "source": "docs/UPSTREAM_SUPPORT.md"
+  }
+}

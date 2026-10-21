@@ -1,4 +1,4 @@
-# Product scope · v0.1
+# Product scope · companion MVP
 
 ## Promise
 
@@ -63,7 +63,7 @@ Fire TV: future adapter only, because launcher restrictions and firmware behavio
 | APK install and launcher handover | Planned, no action control | Verified source/hash/signature + rollback |
 | App preferences / dock / local wallpapers | Inspect safe values | Merge patch and preview |
 | Backup / resume / restore | Specification | Durable, identity-bound journal |
-| Unsplash | Status unknown unless health protocol exists | Optional personal key; distribution terms reviewed |
+| Unsplash / upstream providers | Credential and fetch health unknown without safe readback | Provider selection, Access Key and collection IDs via verified private bridge |
 | Private DNS, screensaver, remote helpers | Explain only | Separate explicit choices and physical checks |
 | Export sanitized support report | Planned | Opt-in, user preview, secrets redacted |
 | Automatic updates / shared remote catalogs | No | Later; signed and opt-in |
@@ -90,12 +90,29 @@ mutations. Injected interruption after every mutation can resume/reconcile witho
 operation. No lost pre-existing customizations. Every failure provides a useful next step. Real usability
 sessions with novice testers on Windows/Linux precede a public stable release.
 
-## This iteration and restore boundaries
+## Active MVP and delivery boundaries
 
-Deliverables now: public scoped repository, Tauri inspection/demo preview, and native test installers
-when their CI builds pass. Modifying workflows remain later milestones. A successful CI build does not
-mean the installer has been tested on a physical Windows/macOS desktop; record those separately.
-Pairing adds debug trust; inspection does not change TV package, HOME or wallpaper configuration.
+The active implementation queue is `openspec/changes/companion-full-setup-mvp`. Its flow is discover,
+pair, inspect, install/select a compatible pinned upstream launcher, configure local photos or supported
+upstream providers, review optional validated TCL cleanup, and maintain/restore later. The predecessor
+personalization change preserves implementation history; its unfinished schedules/provider-adapter tasks
+are not the MVP execution queue. Existing source is a checkpoint, not a completed modifying release.
+
+The MVP includes upstream provider switching (local/Unsplash/automatic where supported), a masked
+Unsplash Access Key, multiple collection IDs, keeping/replacing/removing a saved key, distinct validation
+and retrieval status, and reviewed writes. Configure the launcher's existing providers; do not create
+another retrieval service. Credentials must use a verified private bridge and remain absent from ordinary
+journals, logs and exports. A provider merge alone does not prove that this bridge or a signed downloadable
+APK exists. Missing external integration is reported as a blocked feature, not a fake connected source.
+
+Windows 11 x64 and Ubuntu 24.04 x64 require packaged hands-on acceptance. macOS is experimental until
+separately verified. Cleanup requires approved exact model/firmware evidence for TCL; other TVs retain
+capability-supported setup and inspection. All cleanup choices start off and essential functions stay.
+Schedules, Google Photos, new providers, mobile, DNS, screensavers and remote remapping are deferred.
+
+No live TV testing or native companion launches are permitted until the user explicitly lifts the
+current restriction. Automated/mock checks do not satisfy physical acceptance. Launcher runtime work
+is a separately scoped external dependency; implement this change in the companion repository only.
 
 A baseline is not a full APK/application-data/firmware backup. Restore settings and enablement only
 while detecting conflicts with later changes. Earlier APK versions/data are not promised recoverable.
